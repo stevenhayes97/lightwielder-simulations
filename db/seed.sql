@@ -77,3 +77,7 @@ INSERT INTO effect_modifiers (effect_id, stat, mod_type, amount, condition) VALU
  (3, 'stamina',  'flat',     2,  NULL),
  (4, 'hp',       'percent',  10, NULL),
  (4, 'resistance','flat',    2,  'vs dark magic');
+
+INSERT INTO character_effects (character_id, effect_id, from_story_point_id, until_story_point_id, cause) VALUES
+ (1, 1, 3, NULL, 'Sample: arm wound taken in chapter 12'),
+ (2, 2, 2, 3,    'Sample: exhausted holding the ward');

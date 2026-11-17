@@ -34,6 +34,7 @@ TABLES = {
     "items": {"title": "Items", "label": "name"},
     "item_modifiers": {"title": "Item Modifiers", "label": None},
     "character_equipment": {"title": "Equipment", "label": None},
+    "character_effects": {"title": "Character Effects", "label": None},
     "loadouts": {"title": "Loadouts", "label": "name"},
     "loadout_items": {"title": "Loadout Items", "label": None},
     "effects": {"title": "Effects", "label": "name"},
@@ -223,8 +224,26 @@ def character_sheet(conn, char_id):
            JOIN story_points f ON f.id = ce.from_story_point_id
            LEFT JOIN story_points u ON u.id = ce.until_story_point_id
            WHERE ce.character_id = ? ORDER BY f.sequence, i.name""", (char_id,))]
-    return {"character": character, "stats": stats, "equipment": equipment,
+    effects = [dict(r) for r in conn.execute(
+        """SELECT ce.*, e.name AS effect_name, e.kind, e.category, e.severity,
+                  f.label AS from_label, f.sequence AS from_sequence,
+                  u.label AS until_label, u.sequence AS until_sequence
+           FROM character_effects ce
+           JOIN effects e ON e.id = ce.effect_id
+           JOIN story_points f ON f.id = ce.from_story_point_id
+           LEFT JOIN story_points u ON u.id = ce.until_story_point_id
+           WHERE ce.character_id = ? ORDER BY f.sequence, e.name""", (char_id,))]
+    return {"character": character, "stats": stats, "equipment": equipment, "effects": effects,
             "effective": effective_stats(conn, {"character_id": char_id})}
+
+
+def active_effect_rows(conn, char_id, sequence):
+    return conn.execute(
+        """SELECT ce.* FROM character_effects ce
+           JOIN story_points f ON f.id = ce.from_story_point_id
+           LEFT JOIN story_points u ON u.id = ce.until_story_point_id
+           WHERE ce.character_id = ? AND f.sequence <= ? AND (u.id IS NULL OR u.sequence > ?)
+           ORDER BY f.sequence, ce.id""", (char_id, sequence, sequence)).fetchall()
 
 
 def item_sheet(conn, item_id):
@@ -254,8 +273,15 @@ def loadout_sheet(conn, loadout_id):
 
 
 def effect_sheet(conn, effect_id):
+    sufferers = [dict(r) for r in conn.execute(
+        """SELECT ce.*, c.name AS character_name, f.label AS from_label, u.label AS until_label
+           FROM character_effects ce JOIN characters c ON c.id = ce.character_id
+           JOIN story_points f ON f.id = ce.from_story_point_id
+           LEFT JOIN story_points u ON u.id = ce.until_story_point_id
+           WHERE ce.effect_id = ? ORDER BY f.sequence, c.name""", (effect_id,))]
     return {"effect": get_row(conn, "effects", effect_id),
-            "modifiers": list_rows(conn, "effect_modifiers", {"effect_id": str(effect_id)})}
+            "modifiers": list_rows(conn, "effect_modifiers", {"effect_id": str(effect_id)}),
+            "characters": sufferers}
 
 
 # ------------------------------------------------------------------ simulation
@@ -343,7 +369,8 @@ def _warnings(gear, strength):
 def simulate(conn, params):
     """Compare loadouts for one character at one story point, with generic effects applied.
     Params: character_id, story_point_id (optional: latest), loadouts=1,2, effects=3,4,
-    current=1 to include the gear held at that story point, bare=1 for a no-gear column."""
+    current=1 to include the gear held at that story point, bare=1 for a no-gear column,
+    story_effects=1 to also apply the character_effects active at that story point."""
     if not params.get("character_id", "").isdigit():
         raise ApiError(HTTPStatus.BAD_REQUEST, "character_id is required")
     char = get_row(conn, "characters", int(params["character_id"]))
@@ -366,11 +393,21 @@ def simulate(conn, params):
         raise ApiError(HTTPStatus.BAD_REQUEST, f"{char['name']} has no stat version at or before '{sp['label']}'")
     base = dict(base_row)
 
-    effects = []
-    for eid in _ids(params.get("effects")):
+    def load_effect(eid, source, **extra):
         e = get_row(conn, "effects", eid)
         e["modifiers"] = [dict(m) for m in conn.execute("SELECT * FROM effect_modifiers WHERE effect_id = ?", (eid,))]
-        effects.append(e)
+        e.update(source=source, **extra)
+        return e
+
+    effects = []
+    if params.get("story_effects") == "1":
+        # every span covering this point counts (two overlapping spans = applied twice, like the view)
+        for r in active_effect_rows(conn, char["id"], sp["sequence"]):
+            effects.append(load_effect(r["effect_id"], "story", cause=r["cause"], character_effect_id=r["id"]))
+    from_story = {e["id"] for e in effects}
+    for eid in _ids(params.get("effects")):
+        if eid not in from_story:  # already applied by the story; don't double count
+            effects.append(load_effect(eid, "manual"))
 
     columns = []
     if params.get("bare") == "1":

@@ -186,6 +186,56 @@ class ApiTest(unittest.TestCase):
         self.call("GET", f"/api/loadouts/{mine['id']}", expect=404)
         self.call("GET", f"/api/loadouts/{gen['id']}", expect=200)
 
+    def test_story_effects_on_timeline(self):
+        pts = [self.post("story_points", {"sequence": 3000 + i, "label": f"T{i}"}) for i in range(4)]
+        c = self.post("characters", {"name": "Timeline"})
+        self.post("character_stats", {"character_id": c["id"], "story_point_id": pts[0]["id"],
+                                      "hp": 40, "strength": 12, "intelligence": 10, "stamina": 20})
+        hurt = self.post("effects", {"name": "Broken arm", "kind": "debuff"})
+        self.post("effect_modifiers", {"effect_id": hurt["id"], "stat": "strength", "amount": -4})
+        self.post("effect_modifiers", {"effect_id": hurt["id"], "stat": "hp", "amount": -100, "condition": "if reopened"})
+        tired = self.post("effects", {"name": "Weary", "kind": "debuff"})
+        self.post("effect_modifiers", {"effect_id": tired["id"], "stat": "stamina", "mod_type": "percent", "amount": -25})
+        # broken arm during T1..T2 (healed at T3); weary from T2 onward
+        self.post("character_effects", {"character_id": c["id"], "effect_id": hurt["id"],
+                                        "from_story_point_id": pts[1]["id"], "until_story_point_id": pts[3]["id"],
+                                        "cause": "fell off a horse"})
+        self.post("character_effects", {"character_id": c["id"], "effect_id": tired["id"], "from_story_point_id": pts[2]["id"]})
+        self.call("POST", "/api/character_effects", {"character_id": c["id"], "effect_id": 999999,
+                                                    "from_story_point_id": pts[0]["id"]}, expect=400)
+
+        sheet = self.call("GET", f"/api/characters/{c['id']}/sheet", expect=200)
+        eff = {e["story_point"]: e for e in sheet["effective"]}
+        self.assertEqual([(eff[f"T{i}"]["strength"], eff[f"T{i}"]["stamina"]) for i in range(4)],
+                         [(12, 20), (8, 20), (8, 15), (12, 15)])
+        self.assertEqual(eff["T1"]["hp"], 40)  # conditional modifier ignored
+        self.assertEqual(len(sheet["effects"]), 2)
+        self.assertEqual(sheet["effects"][0]["cause"], "fell off a horse")
+
+        base_q = f"/api/simulate?character_id={c['id']}&story_point_id={pts[2]['id']}&bare=1"
+        off = self.call("GET", base_q, expect=200)["columns"][0]["stats"]
+        self.assertEqual((off["strength"], off["stamina"]), (12, 20))  # story effects not applied unless asked
+        on = self.call("GET", base_q + "&story_effects=1", expect=200)
+        self.assertEqual([e["source"] for e in on["effects"]], ["story", "story"])
+        self.assertEqual((on["columns"][0]["stats"]["strength"], on["columns"][0]["stats"]["stamina"]), (8, 15))
+        # manually picking an effect that the story already applies doesn't double count
+        both = self.call("GET", base_q + f"&story_effects=1&effects={hurt['id']}", expect=200)
+        self.assertEqual(both["columns"][0]["stats"]["strength"], 8)
+        self.assertEqual(len(both["effects"]), 2)
+        # parts expose the split between gear and effects
+        self.assertEqual(on["columns"][0]["parts"]["strength"]["effect_flat"], -4)
+        # story-gear column with story effects matches the view exactly
+        cur = self.call("GET", f"/api/simulate?character_id={c['id']}&story_point_id={pts[2]['id']}&current=1&story_effects=1")
+        for s in server.BASE_STATS + server.GEAR_STATS:
+            self.assertEqual(cur["columns"][0]["stats"][s], eff["T2"][s], s)
+
+        esheet = self.call("GET", f"/api/effects/{hurt['id']}/sheet", expect=200)
+        self.assertEqual([x["character_name"] for x in esheet["characters"]], ["Timeline"])
+        # deleting the effect removes it from the timeline
+        self.call("DELETE", f"/api/effects/{hurt['id']}", expect=200)
+        eff2 = {e["story_point"]: e for e in self.call("GET", f"/api/effective_stats?character_id={c['id']}")}
+        self.assertEqual(eff2["T1"]["strength"], 12)
+
     def test_sql_round_matches_sqlite(self):
         conn = server.connect(":memory:")
         for x in (2.5, 3.5, -2.5, 0.5, 30.8, -0.49, 12.5):

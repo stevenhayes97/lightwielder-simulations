@@ -52,6 +52,15 @@ async function loadLookups() {
 }
 
 const signed = (n, pct) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n)}${pct ? "%" : ""}`;
+// "+2 gear · −3 effects" (or with "base N · " prefix) from a /simulate parts entry
+function partsText(p, withBase) {
+  const bits = withBase ? [`base ${p.base}`] : [];
+  if (p.gear_flat) bits.push(`${signed(p.gear_flat)} gear`);
+  if (p.gear_pct) bits.push(`${signed(p.gear_pct, true)} gear`);
+  if (p.effect_flat) bits.push(`${signed(p.effect_flat)} effects`);
+  if (p.effect_pct) bits.push(`${signed(p.effect_pct, true)} effects`);
+  return bits.join(" · ");
+}
 const modText = (m) => `${signed(m.amount, m.mod_type === "percent")} ${STAT_LABEL[m.stat] || m.stat}`;
 
 function colMeta(table, name) { return state.meta[table].columns.find((c) => c.name === name); }
@@ -75,6 +84,7 @@ function rowLabel(table, row) {
   if (table === "character_equipment") return `${state.labels.items.get(row.item_id)} → ${state.labels.characters.get(row.character_id)}`;
   if (table === "item_modifiers") return `${state.labels.items.get(row.item_id)}: ${modText(row)}`;
   if (table === "effect_modifiers") return `${state.labels.effects.get(row.effect_id)}: ${modText(row)}`;
+  if (table === "character_effects") return `${state.labels.effects.get(row.effect_id)} on ${state.labels.characters.get(row.character_id)}`;
   if (table === "loadout_items") return `${state.labels.items.get(row.item_id)} in ${state.labels.loadouts.get(row.loadout_id)}`;
   return `#${row.id}`;
 }
@@ -83,7 +93,8 @@ function rowLabel(table, row) {
 const NAV_GROUPS = [
   ["Roster", ["characters", "character_stats", "story_points"]],
   ["Gear", ["items", "item_modifiers", "character_equipment"]],
-  ["Loadouts & Effects", ["loadouts", "loadout_items", "effects", "effect_modifiers"]],
+  ["Effects", ["effects", "effect_modifiers", "character_effects"]],
+  ["Loadouts", ["loadouts", "loadout_items"]],
 ];
 function renderNav(active) {
   const link = (href, key, title) => `<a href="${href}" class="${active === key ? "active" : ""}">${esc(title)}</a>`;
@@ -191,7 +202,7 @@ function fieldHtml(table, c, value) {
   if (c.fk) {
     const opts = state.lookups[c.fk.table].map((r) =>
       `<option value="${r.id}" ${String(v) === String(r.id) ? "selected" : ""}>${esc(state.labels[c.fk.table].get(r.id))}${c.fk.table === "story_points" ? ` (${r.sequence})` : ""}</option>`).join("");
-    const blank = c.notnull ? `<option value="" disabled ${v === "" ? "selected" : ""}>Choose…</option>` : `<option value="">${c.name.startsWith("until") ? "- still held -" : c.name === "character_id" ? "- generic (any character) -" : "-"}</option>`;
+    const blank = c.notnull ? `<option value="" disabled ${v === "" ? "selected" : ""}>Choose…</option>` : `<option value="">${c.name.startsWith("until") ? (table === "character_effects" ? "- ongoing -" : "- still held -") : c.name === "character_id" ? "- generic (any character) -" : "-"}</option>`;
     input = `<select id="${id}" name="${c.name}" ${req ? "required" : ""}>${blank}${opts}</select>`;
   } else if (c.options) {
     input = `<select id="${id}" name="${c.name}">${c.notnull ? "" : '<option value="">-</option>'}${c.options.map((o) =>
@@ -254,7 +265,7 @@ document.querySelectorAll("[data-close]").forEach((b) => b.onclick = () => $("#d
 // ------------------------------------------------------------------ character sheet
 async function renderCharacterSheet(id) {
   const sheet = await api("GET", `characters/${id}/sheet`);
-  const { character: ch, stats, equipment, effective } = sheet;
+  const { character: ch, stats, equipment, effects: charEffects, effective } = sheet;
   const statById = new Map(stats.map((s) => [s.id, s]));
   const reload = () => renderCharacterSheet(id);
   const sel = state.sheetPoint?.[id];
@@ -265,14 +276,18 @@ async function renderCharacterSheet(id) {
   const seqOf = (spid) => state.seq.get(spid);
   const pointSeq = seqOf(point);
   const activeAt = (eq) => pointSeq !== undefined && eq.from_sequence <= pointSeq && (eq.until_sequence === null || eq.until_sequence > pointSeq);
+  // per-stat breakdown (base / gear / effects) for the selected point; same math as the view
+  const sim = cur ? await api("GET", `simulate?character_id=${id}&story_point_id=${point}&current=1&story_effects=1`) : null;
+  const parts = sim?.columns[0]?.parts;
+  const activeEffects = charEffects.filter(activeAt);
 
   const fact = (k, v) => v ? `<div><div class="k">${k}</div>${esc(v)}</div>` : "";
   const cell = (e, s, prev) => {
     const isBase = BASE_STATS.includes(s);
     const base = isBase ? statById.get(e.stats_id)[s] : 0;
-    const gear = isBase ? e[s] - base : 0;
+    const mod = isBase ? e[s] - base : 0;
     const d = prev ? e[s] - prev[s] : 0;
-    return `<td class="num">${e[s]}${gear ? `<span class="gear" title="base ${base}, gear ${gear > 0 ? "+" : ""}${gear}">(${gear > 0 ? "+" : ""}${gear})</span>` : ""}${d ? ` <span class="${d > 0 ? "up" : "down"}">${d > 0 ? "▲" : "▼"}${Math.abs(d)}</span>` : ""}</td>`;
+    return `<td class="num">${e[s]}${mod ? `<span class="gear" title="base ${base}, gear & effects ${signed(mod)}">(${signed(mod)})</span>` : ""}${d ? ` <span class="${d > 0 ? "up" : "down"}">${d > 0 ? "▲" : "▼"}${Math.abs(d)}</span>` : ""}</td>`;
   };
 
   main.innerHTML = `
@@ -292,8 +307,9 @@ async function renderCharacterSheet(id) {
       <select id="point">${effective.map((e) => `<option value="${e.story_point_id}" ${e.story_point_id === point ? "selected" : ""}>${esc(e.story_point)}</option>`).join("")}</select>
     </h3>
     ${cur ? `<div class="cards">${[...BASE_STATS, ...usedGear].map((s) => {
-      const base = statById.get(cur.stats_id)[s] ?? 0, gear = cur[s] - base;
-      return `<div class="card"><div class="k">${STAT_LABEL[s]}</div><div class="v">${cur[s]}${BASE_STATS.includes(s) && gear ? `<small>${base} ${gear > 0 ? "+" : "−"} ${Math.abs(gear)} gear</small>` : ""}</div></div>`;
+      const p = parts?.[s];
+      const detail = p && BASE_STATS.includes(s) ? partsText(p, false) : "";
+      return `<div class="card" title="${p ? esc(partsText(p, true)) : ""}"><div class="k">${STAT_LABEL[s]}</div><div class="v">${cur[s]}</div>${detail ? `<div class="card-sub">${esc(p.base)} ${esc(detail)}</div>` : ""}</div>`;
     }).join("")}</div>
     ${cur.is_snapshot ? "" : `<p class="sub">No stat version recorded at this point; base stats carried forward from <b>${esc(statById.get(cur.stats_id).story_point)}</b>.</p>`}`
     : `<div class="empty">No stat versions yet. Add one below.</div>`}
@@ -302,9 +318,15 @@ async function renderCharacterSheet(id) {
     ${tableHtml(["Item", "Category", "Slot", "State"], equipment.filter(activeAt).map((e) =>
       `<tr class="${e.equipped ? "" : "carried"}"><td><a href="#/item/${e.item_id}">${esc(e.item_name)}</a>${e.quantity > 1 ? ` ×${e.quantity}` : ""}</td><td>${esc(e.category)}</td><td>${esc(e.slot ?? "-")}</td><td>${e.equipped ? '<span class="badge on">equipped</span>' : '<span class="badge">carried</span>'}</td></tr>`), "Nothing held at this point.")}
 
+    <h3>Effects at this point</h3>
+    ${tableHtml(["Effect", "Modifiers", "Since", "Until", "Cause"], activeEffects.map((e) => {
+      const ef = sim?.effects.find((x) => x.character_effect_id === e.id);
+      return `<tr><td><a href="#/effect/${e.effect_id}">${esc(e.effect_name)}</a> <span class="badge ${e.kind}">${esc(e.kind)}</span></td><td>${esc(ef ? ef.modifiers.filter((m) => !m.condition).map(modText).join(", ") : "")}</td><td>${esc(e.from_label)}</td><td>${e.until_label ? esc(e.until_label) : '<span class="null">ongoing</span>'}</td><td class="trunc">${esc(e.cause ?? "")}</td></tr>`;
+    }), "No buffs or debuffs at this point.")}
+
     <h3>Progression <span class="spacer"></span></h3>
     <div class="toolbar"><button class="btn primary" id="add-stats">+ Stat version</button>
-      <span class="sub">Numbers include gear (gear part in brackets); ▲▼ is the change from the previous point. Click a row to edit its stat version.</span></div>
+      <span class="sub">Numbers include gear and effects (their net change in brackets); ▲▼ is the change from the previous point. Click a row to edit its stat version.</span></div>
     ${tableHtml(["Story point", ...BASE_STATS.map((s) => STAT_LABEL[s]), ...usedGear.map((s) => STAT_LABEL[s]), "Reason"],
       effective.map((e, i) => {
         const sv = statById.get(e.stats_id);
@@ -315,6 +337,14 @@ async function renderCharacterSheet(id) {
     <div class="toolbar"><button class="btn primary" id="add-gear">+ Give item</button></div>
     ${tableHtml(["Item", "From", "Until", "State", "Qty", "Notes"], equipment.map((e) =>
       `<tr class="clickable" data-eq="${e.id}"><td>${esc(e.item_name)}</td><td>${esc(e.from_label)}</td><td>${e.until_label ? esc(e.until_label) : '<span class="null">still held</span>'}</td><td>${e.equipped ? "equipped" : "carried"}</td><td class="num">${e.quantity}</td><td class="trunc">${esc(e.notes ?? "")}</td></tr>`), "No gear yet.")}
+
+    <h3>Effect history</h3>
+    <div class="toolbar"><button class="btn primary" id="add-effect">+ Apply effect</button>
+      <span class="sub">E.g. injured from Ch. 7 until Ch. 9. Leave “until” blank if it's ongoing.</span></div>
+    ${tableHtml(["Effect", "From", "Until", "Cause", "Notes"], charEffects.map((e) =>
+      `<tr class="clickable" data-cef="${e.id}"><td>${esc(e.effect_name)} <span class="badge ${e.kind}">${esc(e.kind)}</span></td><td>${esc(e.from_label)}</td><td>${e.until_label ? esc(e.until_label) : '<span class="null">ongoing</span>'}</td><td class="trunc">${esc(e.cause ?? "")}</td><td class="trunc">${esc(e.notes ?? "")}</td></tr>`),
+      "No effects recorded on the timeline.")}
+
     <h3>Loadouts</h3>
     <div class="toolbar">
       <button class="btn primary" id="add-loadout">+ Loadout</button>
@@ -339,7 +369,13 @@ async function renderCharacterSheet(id) {
     toast("Loadout saved");
     location.hash = `#/loadout/${lo.id}`;
   };
-  $("#open-lab").onclick = () => { setLabCharacter(id); };
+  $("#open-lab").onclick = () => { setLabCharacter(id, point); };
+  $("#add-effect").onclick = () => openForm("character_effects", null, { character_id: id, from_story_point_id: point ?? "" }, reload);
+  main.querySelectorAll("[data-cef]").forEach((tr) => tr.onclick = () => {
+    const e = charEffects.find((x) => x.id === +tr.dataset.cef);
+    const row = {}; for (const c of state.meta.character_effects.columns) row[c.name] = e[c.name];
+    openForm("character_effects", row, null, reload);
+  });
 
   $("#edit-char").onclick = () => openForm("characters", ch, null, (saved) => saved ? reload() : (location.hash = "#/t/characters"));
   $("#point").onchange = (e) => { (state.sheetPoint ||= {})[id] = +e.target.value; reload(); };
@@ -446,7 +482,7 @@ async function renderLoadoutSheet(id) {
 
 // ------------------------------------------------------------------ effect sheet
 async function renderEffectSheet(id) {
-  const { effect: ef, modifiers } = await api("GET", `effects/${id}/sheet`);
+  const { effect: ef, modifiers, characters } = await api("GET", `effects/${id}/sheet`);
   const reload = () => renderEffectSheet(id);
   main.innerHTML = `
     <div class="page-head">
@@ -464,6 +500,10 @@ async function renderEffectSheet(id) {
     ${tableHtml(["Stat", "Amount", "Condition", "Notes"], modifiers.map((m) =>
       `<tr class="clickable" data-em="${m.id}"><td>${esc(STAT_LABEL[m.stat] || m.stat)}</td><td class="num ${m.amount >= 0 ? "up" : "down"}">${signed(m.amount, m.mod_type === "percent")}</td><td>${esc(m.condition ?? "")}</td><td class="trunc">${esc(m.notes ?? "")}</td></tr>`),
       "No modifiers yet.", ["num"])}
+    <h3>On the timeline</h3>
+    ${tableHtml(["Character", "From", "Until", "Cause"], characters.map((c) =>
+      `<tr><td><a href="#/character/${c.character_id}">${esc(c.character_name)}</a></td><td>${esc(c.from_label)}</td><td>${c.until_label ? esc(c.until_label) : '<span class="null">ongoing</span>'}</td><td class="trunc">${esc(c.cause ?? "")}</td></tr>`),
+      "No character has this effect in the story. Apply it from a character's sheet.")}
     ${ef.notes ? `<h3>Notes</h3><div class="prose">${esc(ef.notes)}</div>` : ""}`;
   $("#edit-ef").onclick = () => openForm("effects", ef, null, (saved) => saved ? reload() : (location.hash = "#/t/effects"));
   $("#add-em").onclick = () => openForm("effect_modifiers", null, { effect_id: id }, reload);
@@ -475,15 +515,16 @@ const LAB_KEY = "lw.lab";
 function labState() {
   if (!state.lab) {
     try { state.lab = JSON.parse(localStorage.getItem(LAB_KEY)); } catch { state.lab = null; }
-    state.lab ||= { character_id: null, story_point_id: "", current: true, bare: false, loadouts: [], effects: [] };
+    state.lab ||= { character_id: null, story_point_id: "", current: true, bare: false, story_effects: true, loadouts: [], effects: [] };
+    state.lab.story_effects ??= true;
   }
   return state.lab;
 }
 function saveLab() { try { localStorage.setItem(LAB_KEY, JSON.stringify(state.lab)); } catch { /* storage unavailable */ } }
-function setLabCharacter(cid) {
+function setLabCharacter(cid, pointId = "") {
   const lab = labState();
   lab.character_id = cid;
-  lab.story_point_id = "";
+  lab.story_point_id = pointId ?? "";
   lab.loadouts = state.lookups.loadouts.filter((l) => l.character_id === cid).map((l) => l.id);
   saveLab();
 }
@@ -505,17 +546,20 @@ async function renderLab() {
   if (lab.story_point_id && !points.some((p) => p.story_point_id === +lab.story_point_id)) lab.story_point_id = "";
   saveLab();
 
-  const chip = (group, value, label, checked, cls = "") =>
-    `<label class="chip ${cls}"><input type="checkbox" data-group="${group}" value="${value}" ${checked ? "checked" : ""}><span>${label}</span></label>`;
+  const chip = (group, value, label, checked, cls = "", disabled = false) =>
+    `<label class="chip ${cls}"${disabled ? ' title="Active in the story at this point. Turn off “Story effects” to remove it."' : ""}><input type="checkbox" data-group="${group}" value="${value}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}><span>${label}</span></label>`;
   const effChips = (kind) => state.lookups.effects.filter((e) => e.kind === kind).map((e) =>
-    chip("effects", e.id, esc(e.name) + (e.severity ? ` <small>${esc(e.severity)}</small>` : ""), lab.effects.includes(e.id), kind)).join("");
+    storyIds.has(e.id)
+      ? chip("effects", e.id, `${esc(e.name)} <small>from story</small>`, true, `${kind} locked`, true)
+      : chip("effects", e.id, esc(e.name) + (e.severity ? ` <small>${esc(e.severity)}</small>` : ""), lab.effects.includes(e.id), kind)).join("");
 
   let sim = null, simError = null;
   if (points.length) {
     const qs = new URLSearchParams({ character_id: cid, story_point_id: lab.story_point_id, loadouts: lab.loadouts.join(","),
-      effects: lab.effects.join(","), current: lab.current ? "1" : "0", bare: lab.bare ? "1" : "0" });
+      effects: lab.effects.join(","), current: lab.current ? "1" : "0", bare: lab.bare ? "1" : "0", story_effects: lab.story_effects ? "1" : "0" });
     try { sim = await api("GET", `simulate?${qs}`); } catch (e) { simError = e.message; }
   }
+  const storyIds = new Set((sim?.effects || []).filter((e) => e.source === "story").map((e) => e.id));
 
   main.innerHTML = `
     <div class="page-head"><h1>Loadout Lab</h1><span class="sub">compare loadouts side by side, with buffs and debuffs applied</span></div>
@@ -536,6 +580,7 @@ async function renderLab() {
         <button class="btn small" id="lab-new-lo">+ Loadout</button>
       </div>
       <div class="lab-group"><span class="lab-label">Effects</span>
+        ${chip("flag", "story_effects", "Story effects at this point", lab.story_effects)}
         ${effChips("debuff")}${effChips("mixed")}${effChips("buff")}
         ${state.lookups.effects.length ? "" : '<span class="sub">No effects defined yet.</span>'}
         <button class="btn small" id="lab-new-ef">+ Effect</button>
@@ -564,16 +609,8 @@ function labResult(sim) {
   if (!cols.length) return `<div class="empty">Pick at least one loadout (or story gear) to compare.</div>`;
   const stats = [...BASE_STATS, ...GEAR_STATS];
   const innate = (s) => (BASE_STATS.includes(s) ? sim.base[s] : 0);
-  const why = (p) => {
-    const bits = [`base ${p.base}`];
-    if (p.gear_flat) bits.push(`gear ${signed(p.gear_flat)}`);
-    if (p.gear_pct) bits.push(`gear ${signed(p.gear_pct, true)}`);
-    if (p.effect_flat) bits.push(`effects ${signed(p.effect_flat)}`);
-    if (p.effect_pct) bits.push(`effects ${signed(p.effect_pct, true)}`);
-    return bits.join(" · ");
-  };
   const effLine = sim.effects.length
-    ? `<p class="sub">Applied to every column: ${sim.effects.map((e) => `<b>${esc(e.name)}</b> (${e.modifiers.filter((m) => !m.condition).map(modText).join(", ") || "situational only"})`).join("; ")}</p>` : "";
+    ? `<p class="sub">Applied to every column: ${sim.effects.map((e) => `<b>${esc(e.name)}</b>${e.source === "story" ? ' <span class="badge">story</span>' : ""} (${e.modifiers.filter((m) => !m.condition).map(modText).join(", ") || "situational only"})`).join("; ")}</p>` : "";
   const baseNote = sim.base.story_point_id === sim.story_point.id ? "" : ` (carried from ${esc(sim.base.story_point)})`;
   const rows = stats.map((s) => {
     const vals = cols.map((c) => c.stats[s]);
@@ -581,7 +618,7 @@ function labResult(sim) {
     const max = Math.max(...vals), min = Math.min(...vals);
     return `<tr><th scope="row">${STAT_LABEL[s]}</th><td class="num innate">${innate(s)}</td>${cols.map((c) => {
       const v = c.stats[s], d = v - innate(s);
-      return `<td class="num ${cols.length > 1 && max !== min && v === max ? "best" : ""}" title="${esc(why(c.parts[s]))}">${v}${d ? ` <span class="${d > 0 ? "up" : "down"}">${signed(d)}</span>` : ""}</td>`;
+      return `<td class="num ${cols.length > 1 && max !== min && v === max ? "best" : ""}" title="${esc(partsText(c.parts[s], true))}">${v}${d ? ` <span class="${d > 0 ? "up" : "down"}">${signed(d)}</span>` : ""}</td>`;
     }).join("")}</tr>`;
   }).join("");
   const head = cols.map((c) => `<th class="num">${c.loadout_id ? `<a href="#/loadout/${c.loadout_id}">${esc(c.label)}</a>` : esc(c.label)}${c.generic ? ' <span class="badge">generic</span>' : ""}</th>`).join("");

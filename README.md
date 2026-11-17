@@ -39,13 +39,15 @@ story_points ──┬──< character_stats >── characters ──< charact
 | `loadout_items` | Items in a loadout (`equipped` 0 = carried in the pack). |
 | `effects` | **Generic buffs/debuffs**: injury, exhaustion, blessings… `kind` (buff/debuff/mixed), `category`, `severity`. |
 | `effect_modifiers` | The stat changes an effect applies, in the same shape as item modifiers. |
+| `character_effects` | **Effects on the story timeline**: e.g. *Injured* from Ch. 7 until (not including) Ch. 9, with a `cause`. Blank `until` = ongoing. Same span rule as equipment. |
 
 ### Effective stats (`v_effective_stats` view)
 For every character at every story point from their first stat version onward:
 
 - **Base** stats come from the most recent stat version at or before that point, so they carry forward until you record a change.
 - **Gear** is every *equipped* item whose span covers that point.
-- `effective = round((base + Σ flat × quantity) × (1 + Σ percent / 100))`
+- **Effects** are every `character_effects` span covering that point (injuries, exhaustion, blessings…).
+- `effective = round((base + Σ flat) × (1 + Σ percent / 100))`, summed over gear and effects (gear flat amounts × quantity)
 - Gear-only stats (`armor`, `attack`, `damage`, `speed`, `resistance`) start at 0. Armor also adds each item's `armor_rating`.
 - Modifiers with a `condition` (e.g. "vs undead") are situational and **not** added to totals.
 
@@ -58,11 +60,14 @@ FROM v_effective_stats WHERE story_point = 'Chapter 5';
 
 ## UI
 - **Table views** for every table: search, filters on related records, sortable columns, click a row to edit, **+ New** to create. Forms are built from the live schema, with dropdowns for related records and fixed choice lists.
-- **Character sheet** (Characters → *Sheet →*): stat cards at any story point (base + gear), gear held at that point, a progression table with ▲▼ changes, equipment history, and quick **+ Stat version** (copies the latest numbers) and **+ Give item**.
+- **Character sheet** (Characters → *Sheet →*): stat cards at any story point with a base / gear / effects breakdown, gear and effects active at that point,
+  **+ Apply effect** to put a buff or debuff on the timeline, effect history, a progression table with ▲▼ changes, equipment history, and quick **+ Stat version** (copies the latest numbers) and **+ Give item**.
 - **Item sheet**: details, modifiers (add/edit inline), and who held it when.
 - **Effective Stats**: all characters side by side, filterable by story point.
 - **⚖ Loadout Lab**: pick a character and story point, tick any mix of their loadouts, generic loadouts,
-  "story gear at this point" and "no gear", then stack effects (e.g. *Injured* + *Exhausted*). You get a
+  "story gear at this point" and "no gear", then stack effects (e.g. *Injured* + *Exhausted*).
+  **Story effects at this point** (on by default) automatically applies whatever the character is suffering
+  at that point in the story. Those effects show as locked "from story" chips, and they're never counted twice if you also tick them. You get a
   side-by-side table with the best value per row in bold and the change from innate stats; hover a value for its breakdown.
   Each column also lists **warnings** (strength requirement not met, two items in one slot, two-hander plus a shield) and
   situational bonuses. Your selections are remembered in the browser.
@@ -93,7 +98,7 @@ JSON over HTTP, for scripts and future simulation code:
 | `GET /api/items/<id>/sheet` | Item + modifiers + holders |
 | `GET /api/effective_stats?character_id=` | The effective stats view |
 | `GET /api/loadouts/<id>/sheet`, `GET /api/effects/<id>/sheet` | Loadout + items; effect + modifiers |
-| `GET /api/simulate?character_id=&story_point_id=&loadouts=1,2&effects=3,4&current=1&bare=1` | Loadout Lab comparison (omit `story_point_id` for latest) |
+| `GET /api/simulate?character_id=&story_point_id=&loadouts=1,2&effects=3,4&current=1&bare=1&story_effects=1` | Loadout Lab comparison (omit `story_point_id` for latest) |
 
 ## Tests
 ```bash
@@ -103,5 +108,4 @@ python -m unittest discover tests
 ## Roadmap ideas
 - **Skills** (swordsmanship, archery, horseback, stealth…): a `skills` catalogue plus versioned
   `character_skills (character, skill, story_point, rank)`, with item and effect modifiers able to target skills.
-- Effects on the story timeline (e.g. "injured from Ch. 7 to Ch. 9") via a `character_effects` span table like equipment.
 - Abilities/spells, character relationships, CSV import/export.

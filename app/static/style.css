@@ -188,3 +188,7 @@ tr.selected td { background: var(--accent-soft); }
 .warn { margin-top: 6px; font-size: 12px; color: var(--danger); }
 .situational { margin-top: 6px; font-size: 12px; }
 @media (max-width: 760px) { .lab-label { width: 100%; } }
+.card-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip.locked { cursor: default; }
+.chip.locked input { cursor: default; }
+.chip.locked span { border-style: dashed; }

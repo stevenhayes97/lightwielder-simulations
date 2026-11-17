@@ -162,6 +162,22 @@ CREATE TABLE IF NOT EXISTS effect_modifiers (
     notes      TEXT
 );
 
+-- ---------------------------------------------------------------------------
+-- Effects on the story timeline: "injured from Ch. 7 until Ch. 9".
+-- Same span rule as character_equipment: from <= point < until (NULL = ongoing).
+-- These feed v_effective_stats, the character sheet, and (optionally) the Lab.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS character_effects (
+    id                    INTEGER PRIMARY KEY,
+    character_id          INTEGER NOT NULL REFERENCES characters(id)   ON DELETE CASCADE,
+    effect_id             INTEGER NOT NULL REFERENCES effects(id)      ON DELETE CASCADE,
+    from_story_point_id   INTEGER NOT NULL REFERENCES story_points(id) ON DELETE RESTRICT,
+    until_story_point_id  INTEGER          REFERENCES story_points(id) ON DELETE RESTRICT,
+    cause                 TEXT,                   -- "ambushed at the ford"
+    notes                 TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_char_effects  ON character_effects(character_id);
 CREATE INDEX IF NOT EXISTS idx_loadouts_char ON loadouts(character_id);
 CREATE INDEX IF NOT EXISTS idx_loadout_items ON loadout_items(loadout_id);
 CREATE INDEX IF NOT EXISTS idx_effect_mods   ON effect_modifiers(effect_id);
@@ -172,8 +188,10 @@ CREATE INDEX IF NOT EXISTS idx_mods_item  ON item_modifiers(item_id);
 -- ---------------------------------------------------------------------------
 -- Effective stats for every (character, story point) from the character's first
 -- stat version onward. Base stats carry forward from the latest version at or
--- before that point; gear is whatever equipped spans cover that point.
---   effective = round((base + sum(flat * qty)) * (1 + sum(percent) / 100))
+-- before that point; gear is whatever equipped spans cover that point, and
+-- effects are whatever character_effects spans cover that point.
+--   effective = round((base + sum(flat)) * (1 + sum(percent) / 100))
+-- (gear flat amounts are multiplied by quantity)
 -- armor's base is the sum of equipped items' armor_rating.
 -- ---------------------------------------------------------------------------
 DROP VIEW IF EXISTS v_effective_stats;
@@ -194,14 +212,29 @@ active AS (
     LEFT JOIN story_points u    ON u.id = ce.until_story_point_id
     WHERE f.sequence <= b.sequence AND (u.id IS NULL OR u.sequence > b.sequence)
 ),
-mods AS (
-    SELECT a.character_id, a.story_point_id, m.stat,
-           SUM(CASE WHEN m.mod_type = 'flat'    THEN m.amount * a.quantity ELSE 0 END) AS flat,
-           SUM(CASE WHEN m.mod_type = 'percent' THEN m.amount              ELSE 0 END) AS pct
-    FROM active a
-    JOIN item_modifiers m ON m.item_id = a.item_id
+active_effects AS (
+    SELECT b.character_id, b.story_point_id, ce.effect_id
+    FROM base b
+    JOIN character_effects ce   ON ce.character_id = b.character_id
+    JOIN story_points f         ON f.id = ce.from_story_point_id
+    LEFT JOIN story_points u    ON u.id = ce.until_story_point_id
+    WHERE f.sequence <= b.sequence AND (u.id IS NULL OR u.sequence > b.sequence)
+),
+all_mods AS (
+    SELECT a.character_id, a.story_point_id, m.stat, m.mod_type, m.amount, a.quantity AS qty
+    FROM active a JOIN item_modifiers m ON m.item_id = a.item_id
     WHERE IFNULL(m.condition, '') = ''
-    GROUP BY a.character_id, a.story_point_id, m.stat
+    UNION ALL
+    SELECT e.character_id, e.story_point_id, m.stat, m.mod_type, m.amount, 1
+    FROM active_effects e JOIN effect_modifiers m ON m.effect_id = e.effect_id
+    WHERE IFNULL(m.condition, '') = ''
+),
+mods AS (
+    SELECT character_id, story_point_id, stat,
+           SUM(CASE WHEN mod_type = 'flat'    THEN amount * qty ELSE 0 END) AS flat,
+           SUM(CASE WHEN mod_type = 'percent' THEN amount       ELSE 0 END) AS pct
+    FROM all_mods
+    GROUP BY character_id, story_point_id, stat
 ),
 g AS (  -- one row per stat version, one column pair per stat
     SELECT character_id, story_point_id,
