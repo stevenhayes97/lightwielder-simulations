@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# SQLite side files. The main data/lightwielder.db IS committed on purpose.
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store

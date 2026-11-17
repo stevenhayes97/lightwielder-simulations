@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lightwielder DB</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="nav-toggle" class="icon-btn" aria-label="Toggle navigation">☰</button>
+    <a href="#/t/characters" class="brand">Lightwielder <span>DB</span></a>
+  </header>
+  <div class="layout">
+    <nav id="nav" class="nav"></nav>
+    <main id="main" class="main" tabindex="-1"></main>
+  </div>
+
+  <dialog id="drawer" class="drawer">
+    <form id="drawer-form" method="dialog" novalidate>
+      <header class="drawer-head">
+        <h2 id="drawer-title"></h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+      </header>
+      <div id="drawer-error" class="error" hidden></div>
+      <div id="drawer-fields" class="fields"></div>
+      <footer class="drawer-foot">
+        <button type="button" id="drawer-delete" class="btn danger">Delete</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
