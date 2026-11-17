@@ -35,6 +35,10 @@ story_points ──┬──< character_stats >── characters ──< charact
 | `items` | Gear catalogue: category, slot, rarity, damage + type, armor rating, weight, value, strength requirement, description, lore. |
 | `item_modifiers` | Buffs/debuffs per item: target stat, `flat` or `percent`, amount (negative = debuff), optional `condition`. |
 | `character_equipment` | Who holds what **over a span of the story**: `from_story_point` up to (not including) `until_story_point`; blank = still held. `equipped` = 0 means carried or stashed, with no effect on stats. |
+| `loadouts` | Pre-built gear sets for "what if" comparisons. Set `character` for a personal loadout, or leave it blank for a **generic** loadout anyone can use. They don't change the story timeline. |
+| `loadout_items` | Items in a loadout (`equipped` 0 = carried in the pack). |
+| `effects` | **Generic buffs/debuffs**: injury, exhaustion, blessings… `kind` (buff/debuff/mixed), `category`, `severity`. |
+| `effect_modifiers` | The stat changes an effect applies, in the same shape as item modifiers. |
 
 ### Effective stats (`v_effective_stats` view)
 For every character at every story point from their first stat version onward:
@@ -57,6 +61,15 @@ FROM v_effective_stats WHERE story_point = 'Chapter 5';
 - **Character sheet** (Characters → *Sheet →*): stat cards at any story point (base + gear), gear held at that point, a progression table with ▲▼ changes, equipment history, and quick **+ Stat version** (copies the latest numbers) and **+ Give item**.
 - **Item sheet**: details, modifiers (add/edit inline), and who held it when.
 - **Effective Stats**: all characters side by side, filterable by story point.
+- **⚖ Loadout Lab**: pick a character and story point, tick any mix of their loadouts, generic loadouts,
+  "story gear at this point" and "no gear", then stack effects (e.g. *Injured* + *Exhausted*). You get a
+  side-by-side table with the best value per row in bold and the change from innate stats; hover a value for its breakdown.
+  Each column also lists **warnings** (strength requirement not met, two items in one slot, two-hander plus a shield) and
+  situational bonuses. Your selections are remembered in the browser.
+- Loadout pages can **duplicate** a loadout. A character sheet can **save the gear at the selected story point as a new loadout**.
+
+Lab formula (the same as the view, plus effects):
+`round((base + gear flat + effect flat) × (1 + (gear % + effect %) / 100))`. Percentages add together; they don't multiply.
 
 ## Changing the schema
 The schema in `db/schema.sql` is applied on every start. New tables and indexes are created, and the view is rebuilt.
@@ -65,8 +78,8 @@ The schema in `db/schema.sql` is applied on every start. New tables and indexes 
 - if you only have sample data: `python app/server.py --reset --seed`.
 
 The UI picks up new columns automatically. To **add a new stat**, add the column to `character_stats`,
-add its name to the `item_modifiers.stat` CHECK list, add a line in `v_effective_stats`, and add it to
-`BASE_STATS` / `STAT_LABEL` at the top of `app/static/app.js`.
+add its name to the `item_modifiers.stat` and `effect_modifiers.stat` CHECK lists, add a line in
+`v_effective_stats`, and add it to `BASE_STATS` in `app/server.py` and to `BASE_STATS` / `STAT_LABEL` at the top of `app/static/app.js`.
 
 ## API
 JSON over HTTP, for scripts and future simulation code:
@@ -79,6 +92,8 @@ JSON over HTTP, for scripts and future simulation code:
 | `GET /api/characters/<id>/sheet` | Character + stat versions + equipment + effective stats |
 | `GET /api/items/<id>/sheet` | Item + modifiers + holders |
 | `GET /api/effective_stats?character_id=` | The effective stats view |
+| `GET /api/loadouts/<id>/sheet`, `GET /api/effects/<id>/sheet` | Loadout + items; effect + modifiers |
+| `GET /api/simulate?character_id=&story_point_id=&loadouts=1,2&effects=3,4&current=1&bare=1` | Loadout Lab comparison (omit `story_point_id` for latest) |
 
 ## Tests
 ```bash
@@ -87,5 +102,6 @@ python -m unittest discover tests
 
 ## Roadmap ideas
 - **Skills** (swordsmanship, archery, horseback, stealth…): a `skills` catalogue plus versioned
-  `character_skills (character, skill, story_point, rank)`, with item modifiers able to target skills.
-- Abilities/spells, character relationships, time-spanned status effects (curses, blessings), CSV import/export.
+  `character_skills (character, skill, story_point, rank)`, with item and effect modifiers able to target skills.
+- Effects on the story timeline (e.g. "injured from Ch. 7 to Ch. 9") via a `character_effects` span table like equipment.
+- Abilities/spells, character relationships, CSV import/export.

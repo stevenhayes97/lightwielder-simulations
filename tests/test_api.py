@@ -120,6 +120,77 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(len(isheet["modifiers"]), 2)
         self.assertEqual(len(isheet["holders"]), 2)
 
+    def test_simulate_loadouts_and_effects(self):
+        p1 = self.post("story_points", {"sequence": 2010, "label": "S1"})
+        p2 = self.post("story_points", {"sequence": 2020, "label": "S2"})
+        c = self.post("characters", {"name": "Sim"})
+        self.post("character_stats", {"character_id": c["id"], "story_point_id": p1["id"],
+                                      "hp": 50, "strength": 10, "intelligence": 10, "stamina": 20})
+        mace = self.post("items", {"name": "Mace", "category": "weapon", "slot": "main_hand", "req_strength": 9})
+        greatsword = self.post("items", {"name": "Greatsword", "category": "weapon", "slot": "two_hand", "req_strength": 14})
+        mail = self.post("items", {"name": "Mail", "category": "armor", "slot": "chest", "armor_rating": 5})
+        self.post("item_modifiers", {"item_id": mace["id"], "stat": "strength", "amount": 1})
+        self.post("item_modifiers", {"item_id": mace["id"], "stat": "damage", "amount": 9, "condition": "vs constructs"})
+        self.post("item_modifiers", {"item_id": greatsword["id"], "stat": "damage", "amount": 4})
+        self.post("item_modifiers", {"item_id": mail["id"], "stat": "stamina", "mod_type": "percent", "amount": -10})
+
+        mine = self.post("loadouts", {"name": "Mace & Mail", "character_id": c["id"]})
+        self.post("loadout_items", {"loadout_id": mine["id"], "item_id": mace["id"]})
+        self.post("loadout_items", {"loadout_id": mine["id"], "item_id": mail["id"]})
+        gen = self.post("loadouts", {"name": "Generic Greatsword"})  # no character = generic
+        self.assertIsNone(gen["character_id"])
+        self.post("loadout_items", {"loadout_id": gen["id"], "item_id": greatsword["id"]})
+        self.post("loadout_items", {"loadout_id": gen["id"], "item_id": mace["id"]})  # slot clash with two-hander
+        self.post("loadout_items", {"loadout_id": gen["id"], "item_id": mail["id"], "equipped": 0})  # carried: no effect
+
+        injured = self.post("effects", {"name": "Injured", "kind": "debuff"})
+        self.post("effect_modifiers", {"effect_id": injured["id"], "stat": "strength", "amount": -3})
+        tired = self.post("effects", {"name": "Tired", "kind": "debuff"})
+        self.post("effect_modifiers", {"effect_id": tired["id"], "stat": "stamina", "mod_type": "percent", "amount": -40})
+        self.call("POST", "/api/effects", {"name": "Bad", "kind": "curse"}, expect=400)
+
+        # story gear: mail from S2 on
+        self.post("character_equipment", {"character_id": c["id"], "item_id": mail["id"], "from_story_point_id": p2["id"]})
+
+        q = (f"/api/simulate?character_id={c['id']}&story_point_id={p2['id']}"
+             f"&loadouts={mine['id']},{gen['id']}&effects={injured['id']},{tired['id']}&current=1&bare=1")
+        sim = self.call("GET", q, expect=200)
+        self.assertEqual(sim["base"]["story_point_id"], p1["id"])  # carried forward
+        cols = {c_["label"]: c_ for c_ in sim["columns"]}
+        self.assertEqual(list(cols), ["No gear", "Story gear @ S2", "Mace & Mail", "Generic Greatsword"])
+        bare, story, mm, gs = (cols[k]["stats"] for k in cols)
+        self.assertEqual((bare["strength"], bare["stamina"]), (7, 12))          # 10-3 ; 20*(1-0.4)
+        self.assertEqual((story["stamina"], story["armor"]), (10, 5))           # 20*(1-0.5)
+        self.assertEqual((mm["strength"], mm["stamina"], mm["armor"]), (8, 10, 5))
+        self.assertEqual((gs["damage"], gs["armor"], gs["strength"]), (4, 0, 8))
+        self.assertEqual([s["condition"] for s in cols["Mace & Mail"]["situational"]], ["vs constructs"])
+        warns = " | ".join(cols["Generic Greatsword"]["warnings"])
+        self.assertIn("Greatsword needs 14 STR", warns)
+        self.assertIn("Two-handed", warns)
+        # the injury (-3 STR) drops strength below the mace's requirement
+        self.assertEqual(cols["Mace & Mail"]["warnings"], ["Mace needs 9 STR (has 8)"])
+
+        # with no effects, story-gear column must agree with the SQL view
+        sim2 = self.call("GET", f"/api/simulate?character_id={c['id']}&story_point_id={p2['id']}&current=1", expect=200)
+        view = [r for r in self.call("GET", f"/api/effective_stats?character_id={c['id']}") if r["story_point_id"] == p2["id"]][0]
+        for s in server.BASE_STATS + server.GEAR_STATS:
+            self.assertEqual(sim2["columns"][0]["stats"][s], view[s], s)
+
+        self.call("GET", "/api/simulate", expect=400)
+        lsheet = self.call("GET", f"/api/loadouts/{gen['id']}/sheet", expect=200)
+        self.assertEqual(len(lsheet["items"]), 3)
+        esheet = self.call("GET", f"/api/effects/{tired['id']}/sheet", expect=200)
+        self.assertEqual(esheet["modifiers"][0]["amount"], -40)
+        # deleting a character removes its personal loadouts but not generic ones
+        self.call("DELETE", f"/api/characters/{c['id']}", expect=200)
+        self.call("GET", f"/api/loadouts/{mine['id']}", expect=404)
+        self.call("GET", f"/api/loadouts/{gen['id']}", expect=200)
+
+    def test_sql_round_matches_sqlite(self):
+        conn = server.connect(":memory:")
+        for x in (2.5, 3.5, -2.5, 0.5, 30.8, -0.49, 12.5):
+            self.assertEqual(server.sql_round(x), conn.execute("SELECT CAST(ROUND(?) AS INTEGER)", (x,)).fetchone()[0], x)
+
     def test_static_ui_served(self):
         with urllib.request.urlopen(self.base + "/") as r:
             self.assertIn(b"Lightwielder", r.read())

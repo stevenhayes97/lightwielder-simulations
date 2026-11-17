@@ -114,6 +114,57 @@ CREATE TABLE IF NOT EXISTS character_equipment (
     notes                 TEXT
 );
 
+-- ---------------------------------------------------------------------------
+-- Loadouts: pre-built gear sets for "what if" comparisons (Loadout Lab).
+-- character_id NULL = generic loadout usable by any character.
+-- These don't affect the story timeline; character_equipment does that.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS loadouts (
+    id            INTEGER PRIMARY KEY,
+    name          TEXT NOT NULL,
+    character_id  INTEGER REFERENCES characters(id) ON DELETE CASCADE,
+    purpose       TEXT,                           -- "siege", "stealth", "travel"
+    description   TEXT,
+    notes         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS loadout_items (
+    id          INTEGER PRIMARY KEY,
+    loadout_id  INTEGER NOT NULL REFERENCES loadouts(id) ON DELETE CASCADE,
+    item_id     INTEGER NOT NULL REFERENCES items(id)    ON DELETE CASCADE,
+    equipped    INTEGER NOT NULL DEFAULT 1 CHECK (equipped IN (0,1)),  -- 0 = carried in pack
+    quantity    INTEGER NOT NULL DEFAULT 1,
+    notes       TEXT
+);
+
+-- ---------------------------------------------------------------------------
+-- Generic buffs / debuffs (injury, exhaustion, blessings...) with the same
+-- modifier shape as items. Applied on top of a loadout in the Loadout Lab.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS effects (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL,
+    kind         TEXT NOT NULL DEFAULT 'debuff' CHECK (kind IN ('buff','debuff','mixed')),
+    category     TEXT,                            -- injury / fatigue / magic / morale / environment
+    severity     TEXT CHECK (severity IN ('minor','moderate','severe','critical')),
+    description  TEXT,
+    notes        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS effect_modifiers (
+    id         INTEGER PRIMARY KEY,
+    effect_id  INTEGER NOT NULL REFERENCES effects(id) ON DELETE CASCADE,
+    stat       TEXT NOT NULL CHECK (stat IN ('hp','strength','intelligence','stamina',
+                                             'armor','attack','damage','speed','resistance')),
+    mod_type   TEXT NOT NULL DEFAULT 'flat' CHECK (mod_type IN ('flat','percent')),
+    amount     REAL NOT NULL,
+    condition  TEXT,
+    notes      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_loadouts_char ON loadouts(character_id);
+CREATE INDEX IF NOT EXISTS idx_loadout_items ON loadout_items(loadout_id);
+CREATE INDEX IF NOT EXISTS idx_effect_mods   ON effect_modifiers(effect_id);
 CREATE INDEX IF NOT EXISTS idx_stats_char ON character_stats(character_id);
 CREATE INDEX IF NOT EXISTS idx_equip_char ON character_equipment(character_id);
 CREATE INDEX IF NOT EXISTS idx_mods_item  ON item_modifiers(item_id);

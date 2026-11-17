@@ -89,7 +89,7 @@ th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--bor
 th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--panel-2); position: sticky; top: 0; }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
-tbody tr:last-child td { border-bottom: 0; }
+tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
 tbody tr.clickable { cursor: pointer; }
 tbody tr.clickable:hover { background: var(--accent-soft); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -150,3 +150,41 @@ tr.selected td { background: var(--accent-soft); }
   .main { padding: 16px; }
   .fields { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* nav groups */
+.nav-group { margin: 14px 12px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+
+/* buff / debuff colours */
+.badge.buff { color: var(--up); }
+.badge.debuff { color: var(--down); }
+
+/* loadout lab */
+.lab-controls { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 12px; }
+.lab-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.lab-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.lab-field select { min-width: 180px; font-weight: 400; }
+.lab-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lab-label { width: 60px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.chip { position: relative; cursor: pointer; }
+.chip input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.chip span {
+  display: inline-block; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--panel); user-select: none;
+}
+.chip small { color: var(--muted); font-size: 11px; }
+.chip:hover span { background: var(--panel-2); }
+.chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip.debuff input:checked + span { background: color-mix(in srgb, var(--down) 14%, var(--panel)); border-color: var(--down); color: var(--down); }
+.chip.buff input:checked + span { background: color-mix(in srgb, var(--up) 14%, var(--panel)); border-color: var(--up); color: var(--up); }
+.lab-table th[scope=row] { color: var(--text); font-size: 13px; background: var(--panel); position: static; }
+.lab-table td.innate { color: var(--muted); }
+.lab-table td.best { font-weight: 700; }
+.lab-table td span.up, .lab-table td span.down { font-size: 11px; }
+.lab-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.lab-card-title { font-weight: 700; margin-bottom: 6px; }
+.gear-list { margin: 0; padding-left: 18px; }
+.gear-list li.carried, .gear-list li.carried a { color: var(--muted); }
+.warn { margin-top: 6px; font-size: 12px; color: var(--danger); }
+.situational { margin-top: 6px; font-size: 12px; }
+@media (max-width: 760px) { .lab-label { width: 100%; } }

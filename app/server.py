@@ -10,6 +10,7 @@ Options: --db PATH  --host HOST  --port N
 """
 import argparse
 import json
+import math
 import mimetypes
 import os
 import re
@@ -33,7 +34,15 @@ TABLES = {
     "items": {"title": "Items", "label": "name"},
     "item_modifiers": {"title": "Item Modifiers", "label": None},
     "character_equipment": {"title": "Equipment", "label": None},
+    "loadouts": {"title": "Loadouts", "label": "name"},
+    "loadout_items": {"title": "Loadout Items", "label": None},
+    "effects": {"title": "Effects", "label": "name"},
+    "effect_modifiers": {"title": "Effect Modifiers", "label": None},
 }
+
+BASE_STATS = ["hp", "strength", "intelligence", "stamina"]
+GEAR_STATS = ["armor", "attack", "damage", "speed", "resistance"]
+TWO_OF_OK = {"ring"}  # slots where two items don't conflict
 DEFAULT_ORDER = {"story_points": "sequence"}
 
 
@@ -227,7 +236,165 @@ def item_sheet(conn, item_id):
            JOIN story_points f ON f.id = ce.from_story_point_id
            LEFT JOIN story_points u ON u.id = ce.until_story_point_id
            WHERE ce.item_id = ? ORDER BY f.sequence""", (item_id,))]
-    return {"item": item, "modifiers": modifiers, "holders": holders}
+    loadouts = [dict(r) for r in conn.execute(
+        """SELECT DISTINCT l.id, l.name, l.character_id, c.name AS character_name, li.equipped
+           FROM loadout_items li JOIN loadouts l ON l.id = li.loadout_id
+           LEFT JOIN characters c ON c.id = l.character_id
+           WHERE li.item_id = ? ORDER BY l.name""", (item_id,))]
+    return {"item": item, "modifiers": modifiers, "holders": holders, "loadouts": loadouts}
+
+
+def loadout_sheet(conn, loadout_id):
+    loadout = get_row(conn, "loadouts", loadout_id)
+    items = [dict(r) for r in conn.execute(
+        """SELECT li.*, i.name AS item_name, i.category, i.slot, i.rarity, i.armor_rating, i.req_strength
+           FROM loadout_items li JOIN items i ON i.id = li.item_id
+           WHERE li.loadout_id = ? ORDER BY li.equipped DESC, i.category, i.name""", (loadout_id,))]
+    return {"loadout": loadout, "items": items}
+
+
+def effect_sheet(conn, effect_id):
+    return {"effect": get_row(conn, "effects", effect_id),
+            "modifiers": list_rows(conn, "effect_modifiers", {"effect_id": str(effect_id)})}
+
+
+# ------------------------------------------------------------------ simulation
+
+def sql_round(x):
+    """Match SQLite ROUND(): half away from zero (Python's round() is banker's)."""
+    return int(math.floor(abs(x) + 0.5)) * (1 if x >= 0 else -1)
+
+
+def _ids(s):
+    return [int(x) for x in (s or "").split(",") if x.strip().isdigit()]
+
+
+def _gear_for(conn, rows):
+    """rows: [{item_id, quantity, equipped}] -> enrich with item info + modifiers."""
+    out = []
+    for r in rows:
+        item = conn.execute("SELECT * FROM items WHERE id = ?", (r["item_id"],)).fetchone()
+        if item is None:
+            continue
+        mods = [dict(m) for m in conn.execute("SELECT * FROM item_modifiers WHERE item_id = ?", (r["item_id"],))]
+        out.append({"item_id": item["id"], "name": item["name"], "category": item["category"],
+                    "slot": item["slot"], "armor_rating": item["armor_rating"] or 0,
+                    "req_strength": item["req_strength"], "quantity": r["quantity"] or 1,
+                    "equipped": r["equipped"], "modifiers": mods})
+    return out
+
+
+def compute_stats(base, gear, effects):
+    """Same formula as v_effective_stats, plus generic effects:
+    stat = round((base + gear_flat + effect_flat) * (1 + (gear_pct + effect_pct) / 100))"""
+    parts = {s: {"base": base.get(s, 0) if s in BASE_STATS else 0,
+                 "gear_flat": 0.0, "gear_pct": 0.0, "effect_flat": 0.0, "effect_pct": 0.0}
+             for s in BASE_STATS + GEAR_STATS}
+    situational = []
+    for g in gear:
+        if not g["equipped"]:
+            continue
+        parts["armor"]["base"] += g["armor_rating"] * g["quantity"]
+        for m in g["modifiers"]:
+            if m["condition"]:
+                situational.append({"source": g["name"], **_mod_view(m)})
+            elif m["mod_type"] == "flat":
+                parts[m["stat"]]["gear_flat"] += m["amount"] * g["quantity"]
+            else:
+                parts[m["stat"]]["gear_pct"] += m["amount"]
+    for e in effects:
+        for m in e["modifiers"]:
+            if m["condition"]:
+                situational.append({"source": e["name"], **_mod_view(m)})
+            elif m["mod_type"] == "flat":
+                parts[m["stat"]]["effect_flat"] += m["amount"]
+            else:
+                parts[m["stat"]]["effect_pct"] += m["amount"]
+    stats = {}
+    for s, p in parts.items():
+        flat = p["base"] + p["gear_flat"] + p["effect_flat"]
+        stats[s] = sql_round(flat * (1 + (p["gear_pct"] + p["effect_pct"]) / 100.0))
+    return stats, parts, situational
+
+
+def _mod_view(m):
+    return {"stat": m["stat"], "mod_type": m["mod_type"], "amount": m["amount"], "condition": m["condition"]}
+
+
+def _warnings(gear, strength):
+    warns, slots = [], {}
+    for g in gear:
+        if not g["equipped"]:
+            continue
+        if g["req_strength"] and strength < g["req_strength"]:
+            warns.append(f"{g['name']} needs {g['req_strength']} STR (has {strength})")
+        if g["slot"] and g["slot"] != "none":
+            slots.setdefault(g["slot"], []).append(g["name"])
+    for slot, names in slots.items():
+        limit = 2 if slot in TWO_OF_OK else 1
+        if len(names) > limit:
+            warns.append(f"Slot '{slot}' holds {len(names)} items: {', '.join(names)}")
+    hands = sum(len(slots.get(s, [])) for s in ("main_hand", "off_hand"))
+    if slots.get("two_hand") and hands:
+        warns.append("Two-handed item equipped alongside a one-handed/off-hand item")
+    return warns
+
+
+def simulate(conn, params):
+    """Compare loadouts for one character at one story point, with generic effects applied.
+    Params: character_id, story_point_id (optional: latest), loadouts=1,2, effects=3,4,
+    current=1 to include the gear held at that story point, bare=1 for a no-gear column."""
+    if not params.get("character_id", "").isdigit():
+        raise ApiError(HTTPStatus.BAD_REQUEST, "character_id is required")
+    char = get_row(conn, "characters", int(params["character_id"]))
+    sp_param = params.get("story_point_id", "")
+    if sp_param.isdigit():
+        sp = get_row(conn, "story_points", int(sp_param))
+    else:
+        sp = conn.execute(
+            """SELECT sp.* FROM character_stats cs JOIN story_points sp ON sp.id = cs.story_point_id
+               WHERE cs.character_id = ? ORDER BY sp.sequence DESC LIMIT 1""", (char["id"],)).fetchone()
+        if sp is None:
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"{char['name']} has no stat versions yet")
+        sp = dict(sp)
+    base_row = conn.execute(
+        """SELECT cs.*, sp.label AS story_point FROM character_stats cs
+           JOIN story_points sp ON sp.id = cs.story_point_id
+           WHERE cs.character_id = ? AND sp.sequence <= ? ORDER BY sp.sequence DESC LIMIT 1""",
+        (char["id"], sp["sequence"])).fetchone()
+    if base_row is None:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"{char['name']} has no stat version at or before '{sp['label']}'")
+    base = dict(base_row)
+
+    effects = []
+    for eid in _ids(params.get("effects")):
+        e = get_row(conn, "effects", eid)
+        e["modifiers"] = [dict(m) for m in conn.execute("SELECT * FROM effect_modifiers WHERE effect_id = ?", (eid,))]
+        effects.append(e)
+
+    columns = []
+    if params.get("bare") == "1":
+        columns.append({"key": "bare", "label": "No gear", "gear": []})
+    if params.get("current") == "1":
+        rows = conn.execute(
+            """SELECT ce.item_id, ce.quantity, ce.equipped FROM character_equipment ce
+               JOIN story_points f ON f.id = ce.from_story_point_id
+               LEFT JOIN story_points u ON u.id = ce.until_story_point_id
+               WHERE ce.character_id = ? AND f.sequence <= ? AND (u.id IS NULL OR u.sequence > ?)""",
+            (char["id"], sp["sequence"], sp["sequence"])).fetchall()
+        columns.append({"key": "current", "label": f"Story gear @ {sp['label']}", "gear": _gear_for(conn, rows)})
+    for lid in _ids(params.get("loadouts")):
+        lo = get_row(conn, "loadouts", lid)
+        rows = conn.execute("SELECT item_id, quantity, equipped FROM loadout_items WHERE loadout_id = ?", (lid,)).fetchall()
+        columns.append({"key": f"loadout:{lid}", "label": lo["name"], "loadout_id": lid,
+                        "generic": lo["character_id"] is None, "gear": _gear_for(conn, rows)})
+
+    for col in columns:
+        stats, parts, situational = compute_stats(base, col["gear"], effects)
+        col.update(stats=stats, parts=parts, situational=situational,
+                   warnings=_warnings(col["gear"], stats["strength"]))
+    return {"character": char, "story_point": sp, "base": base,
+            "effects": effects, "columns": columns}
 
 
 # ----------------------------------------------------------------------- http
@@ -298,12 +465,14 @@ class Handler(BaseHTTPRequestHandler):
             return table_meta(conn), ok
         if parts == ["effective_stats"] and method == "GET":
             return effective_stats(conn, params), ok
+        if parts == ["simulate"] and method == "GET":
+            return simulate(conn, params), ok
         if len(parts) == 3 and parts[2] == "sheet" and method == "GET":
             row_id = self._id(parts[1])
-            if parts[0] == "characters":
-                return character_sheet(conn, row_id), ok
-            if parts[0] == "items":
-                return item_sheet(conn, row_id), ok
+            sheets = {"characters": character_sheet, "items": item_sheet,
+                      "loadouts": loadout_sheet, "effects": effect_sheet}
+            if parts[0] in sheets:
+                return sheets[parts[0]](conn, row_id), ok
         if len(parts) in (1, 2):
             table = parts[0]
             check_table(table)

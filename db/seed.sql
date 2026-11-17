@@ -36,3 +36,44 @@ INSERT INTO character_equipment (character_id, item_id, from_story_point_id, unt
  (1, 1, 2, NULL, 1, 'Picked up in chapter 5'),
  (1, 2, 2, 3,    1, 'Lost in chapter 12'),
  (2, 3, 1, NULL, 1, NULL);
+
+INSERT INTO items (id, name, category, subtype, slot, rarity, damage, damage_type, armor_rating, weight, value, req_strength, description) VALUES
+ (4, 'Sample Shortbow',     'weapon', 'bow',     'two_hand', 'common', '1d6', 'piercing', 0, 2, 25, NULL, 'Light ranged weapon.'),
+ (5, 'Sample Leather Armor','armor',  'leather', 'chest',    'common', NULL,  NULL,       3, 10, 45, NULL, 'Quiet and flexible.'),
+ (6, 'Sample Longsword',    'weapon', 'sword',   'main_hand','common', '1d8', 'slashing', 0, 3, 30, 10, 'Reliable blade.'),
+ (7, 'Sample Kite Shield',  'shield', 'kite',    'off_hand', 'common', NULL,  NULL,       2, 6, 20, 11, NULL);
+
+INSERT INTO item_modifiers (item_id, stat, mod_type, amount, notes) VALUES
+ (4, 'attack', 'flat',  1, NULL),
+ (5, 'speed',  'flat',  1, NULL),
+ (6, 'attack', 'flat',  1, NULL),
+ (6, 'damage', 'flat',  1, NULL),
+ (7, 'resistance', 'flat', 1, NULL);
+
+INSERT INTO loadouts (id, name, character_id, purpose, description) VALUES
+ (1, 'Heavy Assault',  1,    'frontline', 'Sample: axe and plate'),
+ (2, 'Sword & Board',  1,    'defensive', 'Sample: sword, shield, plate'),
+ (3, 'Light Scout',    1,    'stealth',   'Sample: bow and leather'),
+ (4, 'Generic Militia', NULL, 'any',      'Sample generic kit anyone can use');
+
+INSERT INTO loadout_items (loadout_id, item_id, equipped, quantity) VALUES
+ (1, 1, 1, 1), (1, 2, 1, 1),
+ (2, 6, 1, 1), (2, 7, 1, 1), (2, 2, 1, 1),
+ (3, 4, 1, 1), (3, 5, 1, 1), (3, 6, 0, 1),
+ (4, 6, 1, 1), (4, 5, 1, 1);
+
+INSERT INTO effects (id, name, kind, category, severity, description) VALUES
+ (1, 'Injured (arm)',  'debuff', 'injury',  'moderate', 'Sample: wounded sword arm'),
+ (2, 'Exhausted',      'debuff', 'fatigue', 'moderate', 'Sample: days without rest'),
+ (3, 'Well Rested',    'buff',   'fatigue', 'minor',    'Sample: a full night''s sleep'),
+ (4, 'Blessed',        'buff',   'magic',   'minor',    'Sample: protective blessing');
+
+INSERT INTO effect_modifiers (effect_id, stat, mod_type, amount, condition) VALUES
+ (1, 'strength', 'flat',    -3,  NULL),
+ (1, 'attack',   'flat',    -2,  NULL),
+ (2, 'stamina',  'percent', -50, NULL),
+ (2, 'speed',    'flat',    -2,  NULL),
+ (2, 'intelligence','flat', -1,  NULL),
+ (3, 'stamina',  'flat',     2,  NULL),
+ (4, 'hp',       'percent',  10, NULL),
+ (4, 'resistance','flat',    2,  'vs dark magic');
