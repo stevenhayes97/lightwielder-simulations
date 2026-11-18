@@ -23,6 +23,7 @@ Commit after editing to keep it. The DB uses journal mode `DELETE`, so that one 
 ## Data model
 
 ```
+factions ──< character_affiliations >── characters
 story_points ──┬──< character_stats >── characters ──< character_equipment >── items ──< item_modifiers
                └────────────── (from / until) ───────────────┘
 ```
@@ -30,7 +31,9 @@ story_points ──┬──< character_stats >── characters ──< charact
 | Table | What it holds |
 |---|---|
 | `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`. |
-| `characters` | Identity: name, epithet, class, subclass, race, faction, alignment, role, status, age, bio, notes. |
+| `characters` | Identity that doesn't change: name, epithet, **class**, subclass, race, alignment, role, status, age, bio, notes. |
+| `factions` | Kingdoms, orders, guilds, cults…: name, kind, description. |
+| `character_affiliations` | **Versioned rank & faction**: one row per character per story point, like stat versions. `faction` (blank = unaffiliated), `rank`, optional `secret_faction` (true loyalty of a spy or a traitor not yet revealed), `change_reason`. |
 | `character_stats` | **Versioned base stats**: one row per character per story point. `hp`, `strength`, `intelligence`, `stamina`, plus `change_reason`. |
 | `items` | Gear catalogue: category, slot, rarity, damage + type, armor rating, weight, value, strength requirement, description, lore. |
 | `item_modifiers` | Buffs/debuffs per item: target stat, `flat` or `percent`, amount (negative = debuff), optional `condition`. |
@@ -40,6 +43,20 @@ story_points ──┬──< character_stats >── characters ──< charact
 | `effects` | **Generic buffs/debuffs**: injury, exhaustion, blessings… `kind` (buff/debuff/mixed), `category`, `severity`. |
 | `effect_modifiers` | The stat changes an effect applies, in the same shape as item modifiers. |
 | `character_effects` | **Effects on the story timeline**: e.g. *Injured* from Ch. 7 until (not including) Ch. 9, with a `cause`. Blank `until` = ongoing. Same span rule as equipment. |
+
+### Class vs rank vs faction
+**Class** (e.g. *Swordsman*) is who the character is, so it stays on `characters`. **Rank** and **faction** change with the story,
+so they're versioned in `character_affiliations`. A version carries forward until the next one, so record one only where
+something changes: *Squire → Knight* in Ch. 5, *secretly turned by the cult* in Ch. 5 (public faction unchanged,
+`secret_faction` set), *openly defects* in Ch. 12 (new faction and rank). The `v_character_affiliations` view gives the rank and faction in effect for every character at every story point:
+
+```sql
+SELECT character_name, rank, faction, secret_faction
+FROM v_character_affiliations WHERE story_point = 'Chapter 5';
+```
+
+Older DBs with a free-text `characters.faction` are migrated automatically on start: each value becomes a faction and a
+first affiliation version at the character's first stat version, and the old column is dropped.
 
 ### Effective stats (`v_effective_stats` view)
 For every character at every story point from their first stat version onward:
@@ -62,6 +79,10 @@ FROM v_effective_stats WHERE story_point = 'Chapter 5';
 - **Table views** for every table: search, filters on related records, sortable columns, click a row to edit, **+ New** to create. Forms are built from the live schema, with dropdowns for related records and fixed choice lists.
 - **Character sheet** (Characters → *Sheet →*): stat cards at any story point with a base / gear / effects breakdown, gear and effects active at that point,
   **+ Apply effect** to put a buff or debuff on the timeline, effect history, a progression table with ▲▼ changes, equipment history, and quick **+ Stat version** (copies the latest numbers) and **+ Give item**.
+- The character sheet also shows **rank & faction** at the selected story point (including a secret loyalty) and a
+  **rank & faction history**. **+ Rank / faction version** copies the latest values so you only change what moved.
+- **Faction sheet** (Factions → *Sheet →*): members at any story point (open members, secret members, and traitors inside the faction)
+  and a timeline of joins, rank changes, secret turns, reveals and departures.
 - **Item sheet**: details, modifiers (add/edit inline), and who held it when.
 - **Effective Stats**: all characters side by side, filterable by story point.
 - **⚖ Loadout Lab**: pick a character and story point, tick any mix of their loadouts, generic loadouts,
@@ -97,6 +118,8 @@ JSON over HTTP, for scripts and future simulation code:
 | `GET /api/characters/<id>/sheet` | Character + stat versions + equipment + effective stats |
 | `GET /api/items/<id>/sheet` | Item + modifiers + holders |
 | `GET /api/effective_stats?character_id=` | The effective stats view |
+| `GET /api/affiliations?character_id=&story_point_id=&faction_id=` | Rank & faction per story point (`faction_id` matches public or secret members) |
+| `GET /api/factions/<id>/sheet` | Faction + members per point + timeline of events |
 | `GET /api/loadouts/<id>/sheet`, `GET /api/effects/<id>/sheet` | Loadout + items; effect + modifiers |
 | `GET /api/simulate?character_id=&story_point_id=&loadouts=1,2&effects=3,4&current=1&bare=1&story_effects=1` | Loadout Lab comparison (omit `story_point_id` for latest) |
 

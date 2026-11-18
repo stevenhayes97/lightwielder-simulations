@@ -30,6 +30,8 @@ DEFAULT_DB = os.path.join(ROOT, "data", "lightwielder.db")
 TABLES = {
     "characters": {"title": "Characters", "label": "name"},
     "character_stats": {"title": "Stat Versions", "label": None},
+    "character_affiliations": {"title": "Rank & Faction Versions", "label": None},
+    "factions": {"title": "Factions", "label": "name"},
     "story_points": {"title": "Story Points", "label": "label"},
     "items": {"title": "Items", "label": "name"},
     "item_modifiers": {"title": "Item Modifiers", "label": None},
@@ -44,7 +46,7 @@ TABLES = {
 BASE_STATS = ["hp", "strength", "intelligence", "stamina"]
 GEAR_STATS = ["armor", "attack", "damage", "speed", "resistance"]
 TWO_OF_OK = {"ring"}  # slots where two items don't conflict
-DEFAULT_ORDER = {"story_points": "sequence"}
+DEFAULT_ORDER = {"story_points": "sequence", "factions": "name"}
 
 
 class ApiError(Exception):
@@ -70,6 +72,7 @@ def init_db(db_path, seed=False):
         conn.execute("PRAGMA journal_mode = DELETE")  # keep everything in the single .db file
         with open(SCHEMA, encoding="utf-8") as f:
             conn.executescript(f.read())
+        migrate_character_faction(conn)
         if seed:
             empty = conn.execute("SELECT COUNT(*) FROM characters").fetchone()[0] == 0
             if empty:
@@ -81,6 +84,35 @@ def init_db(db_path, seed=False):
         conn.commit()
     finally:
         conn.close()
+
+
+def migrate_character_faction(conn):
+    """Older DBs kept a free-text `faction` on characters. Move each value into
+    `factions` + a first `character_affiliations` version (at the character's
+    first stat version, else the earliest story point), then drop the column."""
+    if "faction" not in columns_of(conn, "characters"):
+        return
+    first_point = conn.execute("SELECT id FROM story_points ORDER BY sequence LIMIT 1").fetchone()
+    pending = conn.execute("SELECT id, faction FROM characters WHERE IFNULL(TRIM(faction), '') <> ''").fetchall()
+    for ch in pending:
+        sp = conn.execute(
+            """SELECT cs.story_point_id FROM character_stats cs JOIN story_points sp ON sp.id = cs.story_point_id
+               WHERE cs.character_id = ? ORDER BY sp.sequence LIMIT 1""", (ch["id"],)).fetchone() or first_point
+        if sp is None:
+            print("Not migrating characters.faction: add a story point first")
+            return
+        name = ch["faction"].strip()
+        conn.execute("INSERT OR IGNORE INTO factions (name) VALUES (?)", (name,))
+        fid = conn.execute("SELECT id FROM factions WHERE name = ?", (name,)).fetchone()[0]
+        if not conn.execute("SELECT 1 FROM character_affiliations WHERE character_id = ?", (ch["id"],)).fetchone():
+            conn.execute("""INSERT INTO character_affiliations (character_id, story_point_id, faction_id, change_reason)
+                            VALUES (?, ?, ?, 'Migrated from character faction')""", (ch["id"], sp[0], fid))
+    if sqlite3.sqlite_version_info >= (3, 35, 0):
+        conn.execute("ALTER TABLE characters DROP COLUMN faction")
+        print(f"Moved characters.faction into factions / character_affiliations ({len(pending)} characters)")
+    else:
+        conn.execute("UPDATE characters SET faction = NULL")
+        print("Moved characters.faction into character_affiliations (SQLite < 3.35 can't drop the old column)")
 
 
 _CHECK_IN = re.compile(r"CHECK\s*\(\s*(\w+)\s+IN\s*\(([^)]*)\)\s*\)", re.I)
@@ -209,6 +241,71 @@ def effective_stats(conn, params):
     return [dict(r) for r in conn.execute(sql, args)]
 
 
+AFFIL_SQL = """SELECT ca.*, sp.label AS story_point, sp.sequence, c.name AS character_name,
+                 f.name AS faction, sf.name AS secret_faction
+          FROM character_affiliations ca
+          JOIN story_points sp ON sp.id = ca.story_point_id
+          JOIN characters c ON c.id = ca.character_id
+          LEFT JOIN factions f  ON f.id  = ca.faction_id
+          LEFT JOIN factions sf ON sf.id = ca.secret_faction_id"""
+
+
+def affiliations(conn, params):
+    """Rank & faction per character per story point (v_character_affiliations)."""
+    where, args = [], []
+    for k in ("character_id", "story_point_id"):
+        if params.get(k):
+            where.append(f"{k} = ?")
+            args.append(params[k])
+    if params.get("faction_id"):  # public or secret members
+        where.append("(faction_id = ? OR secret_faction_id = ?)")
+        args += [params["faction_id"]] * 2
+    sql = "SELECT * FROM v_character_affiliations"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return [dict(r) for r in conn.execute(sql + " ORDER BY sequence, character_name", args)]
+
+
+def faction_sheet(conn, faction_id):
+    """Faction + every version that joins, changes rank in, or leaves it.
+    `event`: joined, rank, turned traitor, loyal again, secretly joined, went undercover, revealed, left."""
+    faction = get_row(conn, "factions", faction_id)
+    rows = [dict(r) for r in conn.execute(
+        AFFIL_SQL + """ WHERE ca.character_id IN (SELECT character_id FROM character_affiliations
+                                                   WHERE faction_id = ? OR secret_faction_id = ?)
+           ORDER BY ca.character_id, sp.sequence""", (faction_id, faction_id))]
+    history, prev = [], None
+    for r in rows:
+        if prev and prev["character_id"] != r["character_id"]:
+            prev = None
+        was_pub = bool(prev) and prev["faction_id"] == faction_id
+        was_sec = bool(prev) and prev["secret_faction_id"] == faction_id
+        is_pub, is_sec = r["faction_id"] == faction_id, r["secret_faction_id"] == faction_id
+        event = None
+        if is_pub:
+            if was_sec:
+                event = "revealed"           # a secret loyalist now openly joins
+            elif not was_pub:
+                event = "joined"
+            elif prev["secret_faction_id"] != r["secret_faction_id"]:
+                event = "turned traitor" if r["secret_faction_id"] else "loyal again"
+            elif prev["rank"] != r["rank"]:
+                event = "rank"
+        elif is_sec:
+            if was_pub:
+                event = "went undercover"    # publicly left, secretly still loyal
+            elif not was_sec:
+                event = "secretly joined"    # a spy / sleeper for this faction
+        elif was_pub or was_sec:
+            event = "left"
+        if event:
+            history.append({**r, "event": event})
+        prev = r
+    history.sort(key=lambda r: (r["sequence"], r["character_name"]))
+    return {"faction": faction, "history": history,
+            "members": affiliations(conn, {"faction_id": faction_id})}
+
+
 def character_sheet(conn, char_id):
     character = get_row(conn, "characters", char_id)
     stats = [dict(r) for r in conn.execute(
@@ -233,8 +330,9 @@ def character_sheet(conn, char_id):
            JOIN story_points f ON f.id = ce.from_story_point_id
            LEFT JOIN story_points u ON u.id = ce.until_story_point_id
            WHERE ce.character_id = ? ORDER BY f.sequence, e.name""", (char_id,))]
+    affil = [dict(r) for r in conn.execute(AFFIL_SQL + " WHERE ca.character_id = ? ORDER BY sp.sequence", (char_id,))]
     return {"character": character, "stats": stats, "equipment": equipment, "effects": effects,
-            "effective": effective_stats(conn, {"character_id": char_id})}
+            "affiliations": affil, "effective": effective_stats(conn, {"character_id": char_id})}
 
 
 def active_effect_rows(conn, char_id, sequence):
@@ -502,12 +600,15 @@ class Handler(BaseHTTPRequestHandler):
             return table_meta(conn), ok
         if parts == ["effective_stats"] and method == "GET":
             return effective_stats(conn, params), ok
+        if parts == ["affiliations"] and method == "GET":
+            return affiliations(conn, params), ok
         if parts == ["simulate"] and method == "GET":
             return simulate(conn, params), ok
         if len(parts) == 3 and parts[2] == "sheet" and method == "GET":
             row_id = self._id(parts[1])
             sheets = {"characters": character_sheet, "items": item_sheet,
-                      "loadouts": loadout_sheet, "effects": effect_sheet}
+                      "loadouts": loadout_sheet, "effects": effect_sheet,
+                      "factions": faction_sheet}
             if parts[0] in sheets:
                 return sheets[parts[0]](conn, row_id), ok
         if len(parts) in (1, 2):

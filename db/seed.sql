@@ -5,10 +5,24 @@ INSERT INTO story_points (id, sequence, label, arc, description) VALUES
  (2, 20, 'Chapter 5',      'Book 1', 'Sample: first real fight'),
  (3, 30, 'Chapter 12',     'Book 1', 'Sample: aftermath of a setback');
 
-INSERT INTO characters (id, name, epithet, class, race, faction, role, status, age, bio) VALUES
- (1, 'Sample Hero',    'the Untested', 'Warrior', 'Human', 'Example Order', 'protagonist', 'alive', 19, 'Placeholder protagonist.'),
- (2, 'Sample Mentor',  'Greycloak',    'Mage',    'Elf',   'Example Order', 'ally',        'alive', 240, 'Placeholder mentor.'),
- (3, 'Sample Villain', NULL,           'Rogue',   'Human', 'Example Cult',  'antagonist',  'alive', 41, 'Placeholder antagonist.');
+INSERT INTO characters (id, name, epithet, class, race, role, status, age, bio) VALUES
+ (1, 'Sample Hero',    'the Untested', 'Warrior', 'Human', 'protagonist', 'alive', 19, 'Placeholder protagonist.'),
+ (2, 'Sample Mentor',  'Greycloak',    'Mage',    'Elf',   'ally',        'alive', 240, 'Placeholder mentor.'),
+ (3, 'Sample Villain', NULL,           'Rogue',   'Human', 'antagonist',  'alive', 41, 'Placeholder antagonist.');
+
+INSERT INTO factions (id, name, kind, description) VALUES
+ (1, 'Example Order', 'order', 'Sample: the knightly order the heroes serve'),
+ (2, 'Example Cult',  'cult',  'Sample: the shadowy antagonists');
+
+-- Rank & faction versions. The mentor is secretly turned by Chapter 5 and
+-- openly defects in Chapter 12; the hero is promoted along the way.
+INSERT INTO character_affiliations (character_id, story_point_id, faction_id, rank, secret_faction_id, change_reason) VALUES
+ (1, 1, 1, 'Squire',      NULL, 'Starting rank'),
+ (1, 2, 1, 'Knight',      NULL, 'Knighted after the first fight'),
+ (2, 1, 1, 'Archmage',    NULL, 'Starting rank'),
+ (2, 2, 1, 'Archmage',    2,    'Secretly turned by the cult'),
+ (2, 3, 2, 'Herald',      NULL, 'Betrayed the Order openly'),
+ (3, 2, 2, 'High Priest', NULL, 'First appearance');
 
 INSERT INTO character_stats (character_id, story_point_id, hp, strength, intelligence, stamina, change_reason) VALUES
  (1, 1, 20, 11,  9, 10, 'Starting stats'),

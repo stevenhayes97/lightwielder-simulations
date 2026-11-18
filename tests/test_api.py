@@ -236,6 +236,50 @@ class ApiTest(unittest.TestCase):
         eff2 = {e["story_point"]: e for e in self.call("GET", f"/api/effective_stats?character_id={c['id']}")}
         self.assertEqual(eff2["T1"]["strength"], 12)
 
+    def test_rank_and_faction_versions(self):
+        p1 = self.post("story_points", {"sequence": 710, "label": "Aff 1"})
+        p2 = self.post("story_points", {"sequence": 720, "label": "Aff 2"})
+        p3 = self.post("story_points", {"sequence": 730, "label": "Aff 3"})
+        p4 = self.post("story_points", {"sequence": 740, "label": "Aff 4"})
+        order = self.post("factions", {"name": "Aff Order"})
+        cult = self.post("factions", {"name": "Aff Cult"})
+        ch = self.post("characters", {"name": "Turncoat", "class": "Swordsman"})
+        cid = ch["id"]
+        self.post("character_affiliations", {"character_id": cid, "story_point_id": p1["id"],
+                                             "faction_id": order["id"], "rank": "Squire"})
+        self.post("character_affiliations", {"character_id": cid, "story_point_id": p2["id"],
+                                             "faction_id": order["id"], "rank": "Knight"})
+        self.post("character_affiliations", {"character_id": cid, "story_point_id": p3["id"],
+                                             "faction_id": order["id"], "rank": "Knight",
+                                             "secret_faction_id": cult["id"], "change_reason": "Turned"})
+        self.post("character_affiliations", {"character_id": cid, "story_point_id": p4["id"],
+                                             "faction_id": cult["id"], "rank": "Herald", "change_reason": "Betrayal"})
+        # secret faction can't equal the public one; one version per point
+        self.call("POST", "/api/character_affiliations", {"character_id": cid, "story_point_id": p1["id"]}, expect=400)
+        self.call("PUT", f"/api/factions/{order['id']}", {"name": "Aff Cult"}, expect=400)
+        bad = {"character_id": cid, "story_point_id": self.post("story_points", {"sequence": 750, "label": "Aff 5"})["id"],
+               "faction_id": cult["id"], "secret_faction_id": cult["id"]}
+        self.call("POST", "/api/character_affiliations", bad, expect=400)
+        # a faction in use can't be deleted
+        self.call("DELETE", f"/api/factions/{cult['id']}", expect=400)
+
+        rows = {r["story_point"]: r for r in self.call("GET", f"/api/affiliations?character_id={cid}", expect=200)}
+        self.assertEqual(rows["Aff 2"]["rank"], "Knight")
+        self.assertEqual(rows["Aff 3"]["secret_faction"], "Aff Cult")
+        self.assertEqual((rows["Aff 4"]["faction"], rows["Aff 4"]["rank"]), ("Aff Cult", "Herald"))
+        self.assertEqual((rows["Aff 5"]["faction"], rows["Aff 5"]["is_snapshot"]), ("Aff Cult", 0))  # carried forward
+        self.assertEqual(self.call("GET", f"/api/characters/{cid}", expect=200)["class"], "Swordsman")
+
+        sheet = self.call("GET", f"/api/characters/{cid}/sheet", expect=200)
+        self.assertEqual([a["rank"] for a in sheet["affiliations"]], ["Squire", "Knight", "Knight", "Herald"])
+        events = lambda fid: [(h["story_point"], h["event"]) for h in
+                              self.call("GET", f"/api/factions/{fid}/sheet", expect=200)["history"]]
+        self.assertEqual(events(order["id"]), [("Aff 1", "joined"), ("Aff 2", "rank"),
+                                               ("Aff 3", "turned traitor"), ("Aff 4", "left")])
+        self.assertEqual(events(cult["id"]), [("Aff 3", "secretly joined"), ("Aff 4", "revealed")])
+        members = self.call("GET", f"/api/affiliations?faction_id={cult['id']}&story_point_id={p3['id']}", expect=200)
+        self.assertEqual([m["character_name"] for m in members], ["Turncoat"])
+
     def test_sql_round_matches_sqlite(self):
         conn = server.connect(":memory:")
         for x in (2.5, 3.5, -2.5, 0.5, 30.8, -0.49, 12.5):
@@ -257,6 +301,37 @@ class SeedTest(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM characters").fetchone()[0], 3)
             hero = conn.execute("SELECT hp, strength FROM v_effective_stats WHERE character_id=1 AND story_point_id=2").fetchone()
             self.assertEqual(tuple(hero), (31, 15))
+            mentor = conn.execute("""SELECT faction, rank, secret_faction FROM v_character_affiliations
+                                     WHERE character_id=2 ORDER BY sequence""").fetchall()
+            self.assertEqual([tuple(r) for r in mentor], [("Example Order", "Archmage", None),
+                                                          ("Example Order", "Archmage", "Example Cult"),
+                                                          ("Example Cult", "Herald", None)])
+            conn.close()
+
+    def test_migrates_old_faction_column(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "old.db")
+            conn = server.connect(db)
+            conn.executescript("""
+                CREATE TABLE story_points (id INTEGER PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE,
+                                           label TEXT NOT NULL, arc TEXT, description TEXT);
+                CREATE TABLE characters (id INTEGER PRIMARY KEY, name TEXT NOT NULL, epithet TEXT, class TEXT,
+                    subclass TEXT, race TEXT, faction TEXT, alignment TEXT, role TEXT, status TEXT NOT NULL DEFAULT 'alive',
+                    age INTEGER, bio TEXT, notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+                INSERT INTO story_points VALUES (1, 10, 'Start', NULL, NULL), (2, 20, 'Later', NULL, NULL);
+                INSERT INTO characters (id, name, class, faction) VALUES (1, 'A', 'Swordsman', 'Guild'),
+                                                                        (2, 'B', NULL, 'Guild'), (3, 'C', NULL, NULL);""")
+            conn.commit()
+            conn.close()
+            server.init_db(db)
+            server.init_db(db)  # second run is a no-op
+            conn = server.connect(db)
+            self.assertNotIn("faction", server.columns_of(conn, "characters"))
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM factions").fetchone()[0], 1)
+            rows = conn.execute("SELECT character_id, story_point_id, faction FROM v_character_affiliations "
+                                "WHERE story_point_id = 1 ORDER BY character_id").fetchall()
+            self.assertEqual([tuple(r) for r in rows], [(1, 1, "Guild"), (2, 1, "Guild")])
             conn.close()
 
 

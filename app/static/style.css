@@ -192,3 +192,10 @@ tr.selected td { background: var(--accent-soft); }
 .chip.locked { cursor: default; }
 .chip.locked input { cursor: default; }
 .chip.locked span { border-style: dashed; }
+
+/* rank & faction */
+.badge.secret { color: #7a4fc2; border-style: dashed; }
+.badge.secret a { color: inherit; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .badge.secret { color: #b99af0; } }
+:root[data-theme="dark"] .badge.secret { color: #b99af0; }
+td.changed { font-weight: 600; }
