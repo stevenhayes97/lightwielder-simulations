@@ -33,6 +33,7 @@ story_points ──┬──< character_stats >── characters ──< charact
 | `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`, `years_elapsed` (in-world years since the story began; drives ages). |
 | `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, appearance (`height`, `build`, `hair`, `eyes`), `personality`, `goals`, alignment, role, status, `age_at_start`, bio, notes. |
 | `factions` | Kingdoms, orders, guilds, cults…: name, kind, description. |
+| `faction_ranks` | **Rank ladder per faction**, which can branch: `faction`, `name`, `path` (blank = shared by all; e.g. *Archery* / *Infantry*), `tier` (1 = lowest; ranks on different paths can share a tier; leave gaps like 10, 20, 30), `description`, `requirements`. Hunters Guild: Cadet → (Archery: Marksman → Ranger) or (Infantry: Warden → Templar → Venator, a.k.a. Light Wielder) → Captain → Officer → Commander. |
 | `character_affiliations` | **Versioned rank & faction**: one row per character per story point, like stat versions. `faction` (blank = unaffiliated), `rank`, optional `secret_faction` (true loyalty of a spy or a traitor not yet revealed), `change_reason`. |
 | `character_titles` | **Versioned title / epithet** (*the Great*, *Greycloak*): one row per character per story point, carried forward until the next. No row yet = no title; a blank `title` = lost or stripped from that point. `change_reason`. |
 | `skills` | Skill catalogue: swordsmanship, history, a language, calling the Light…: name, category, description. |
@@ -156,8 +157,8 @@ python -m unittest discover tests
 
 ## Roadmap ideas
 - **Skill modifiers**: let item and effect modifiers target skills, not just stats.
-- **TODO: rank hierarchy.** Ranks are free text for now. Possible next step: a per-faction `faction_ranks`
-  ladder (name + order) so promotions and demotions show up automatically on sheets and faction timelines.
+- **Rank ladder follow-up.** `faction_ranks` now defines each faction's ladder, but `character_affiliations.rank` is still
+  free text. Possible next step: link it to `faction_ranks` so promotions and demotions show up automatically on sheets and faction timelines.
 - **TODO: alignment as free-form text.** `characters.alignment` is a one-line field built for labels like
   *Lawful Good*. Replace it, or add a field next to it, with a free-form description of the character's moral outlook
   (beliefs, lines they won't cross, contradictions), shown as a multi-line box. Consider versioning it per story point,

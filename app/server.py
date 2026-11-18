@@ -35,6 +35,7 @@ TABLES = {
     "skills": {"title": "Skills", "label": "name"},
     "character_skills": {"title": "Skill Versions", "label": None},
     "factions": {"title": "Factions", "label": "name"},
+    "faction_ranks": {"title": "Faction Ranks", "label": "name"},
     "story_points": {"title": "Story Points", "label": "label"},
     "items": {"title": "Items", "label": "name"},
     "item_modifiers": {"title": "Item Modifiers", "label": None},
@@ -49,7 +50,7 @@ TABLES = {
 BASE_STATS = ["hp", "strength", "intelligence", "stamina"]
 GEAR_STATS = ["armor", "attack", "damage", "speed", "resistance"]
 TWO_OF_OK = {"ring"}  # slots where two items don't conflict
-DEFAULT_ORDER = {"story_points": "sequence", "factions": "name", "skills": "name"}
+DEFAULT_ORDER = {"story_points": "sequence", "factions": "name", "faction_ranks": "tier", "skills": "name"}
 
 
 class ApiError(Exception):

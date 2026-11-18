@@ -85,6 +85,27 @@ CREATE TABLE IF NOT EXISTS factions (
 );
 
 -- ---------------------------------------------------------------------------
+-- Faction ranks: the rank ladder of each faction. Ladders can branch.
+--   path   NULL = shared by everyone (Cadet, officers); otherwise the branch
+--          this rank belongs to ("Archery", "Infantry")
+--   tier   position on the ladder, 1 = lowest. Ranks on different paths can
+--          share a tier (Marksman and Warden are both 20). Leave gaps
+--          (10, 20, 30) so ranks can be inserted later.
+-- character_affiliations.rank stays free text and should match a rank name here.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS faction_ranks (
+    id            INTEGER PRIMARY KEY,
+    faction_id    INTEGER NOT NULL REFERENCES factions(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,                  -- "Cadet"
+    path          TEXT,                           -- NULL = shared; "Archery" / "Infantry"
+    tier          INTEGER NOT NULL,               -- position in the ladder, 1 = lowest
+    description   TEXT,                           -- what the rank means in the faction
+    requirements  TEXT,                           -- what it takes to reach this rank
+    notes         TEXT,
+    UNIQUE (faction_id, name)
+);
+
+-- ---------------------------------------------------------------------------
 -- Versioned rank & faction: one row per character per story point, like
 -- character_stats. A version carries forward until the next one, so record a
 -- new version only where something changes (promotion, defection, treachery).
