@@ -140,4 +140,8 @@ python -m unittest discover tests
   `character_skills (character, skill, story_point, rank)`, with item and effect modifiers able to target skills.
 - **TODO: rank hierarchy.** Ranks are free text for now. Possible next step: a per-faction `faction_ranks`
   ladder (name + order) so promotions and demotions show up automatically on sheets and faction timelines.
+- **TODO: alignment as free-form text.** `characters.alignment` is a one-line field built for labels like
+  *Lawful Good*. Replace it, or add a field next to it, with a free-form description of the character's moral outlook
+  (beliefs, lines they won't cross, contradictions), shown as a multi-line box. Consider versioning it per story point,
+  like titles, so the outlook can shift with the story.
 - Abilities/spells, character relationships, CSV import/export.
