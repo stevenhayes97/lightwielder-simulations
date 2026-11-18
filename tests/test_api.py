@@ -74,6 +74,21 @@ class ApiTest(unittest.TestCase):
         self.call("POST", "/api/characters", {"name": "X", "title": "the Great"}, expect=400)  # titles are versioned
         self.call("DELETE", f"/api/characters/{c['id']}", expect=200)
 
+    def test_ages_follow_story(self):
+        pts = [self.post("story_points", {"sequence": 8000 + i, "label": f"Age pt {i}", "years_elapsed": y})
+               for i, y in enumerate([-20, 0, None, 1.5, None])]
+        cid = self.post("characters", {"name": "Age Test", "age_at_start": 19})["id"]
+        ages = {a["story_point"]: a["age"] for a in
+                self.call("GET", f"/api/characters/{cid}/sheet", expect=200)["ages"]}
+        self.assertIsNone(ages["Age pt 0"])           # flashback before birth
+        self.assertEqual(ages["Age pt 1"], 19)
+        self.assertEqual(ages["Age pt 2"], 19)        # blank = carried forward
+        self.assertEqual(ages["Age pt 3"], 20)        # 19 + 1.5, rounded down
+        self.assertEqual(ages["Age pt 4"], 20)
+        self.call("DELETE", f"/api/characters/{cid}", expect=200)
+        for p in pts:
+            self.call("DELETE", f"/api/story_points/{p['id']}", expect=200)
+
     def test_title_versions(self):
         p = [self.post("story_points", {"sequence": 7000 + i, "label": f"Title pt {i}"}) for i in range(4)]
         cid = self.post("characters", {"name": "Title Test"})["id"]
@@ -355,6 +370,8 @@ class SeedTest(unittest.TestCase):
             self.assertNotIn("faction", cols)
             self.assertNotIn("epithet", cols)
             self.assertNotIn("title", cols)
+            self.assertIn("age_at_start", cols)
+            self.assertNotIn("age", cols)
             self.assertTrue({"suffix", "nickname"} <= set(cols))
             self.assertEqual([tuple(r) for r in conn.execute("SELECT character_id, story_point_id, title FROM character_titles")],
                              [(1, 1, "the Bold")])

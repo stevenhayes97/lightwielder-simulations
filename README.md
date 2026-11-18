@@ -30,8 +30,8 @@ story_points ──┬──< character_stats >── characters ──< charact
 
 | Table | What it holds |
 |---|---|
-| `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`. |
-| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, alignment, role, status, age, bio, notes. |
+| `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`, `years_elapsed` (in-world years since the story began; drives ages). |
+| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, alignment, role, status, `age_at_start`, bio, notes. |
 | `factions` | Kingdoms, orders, guilds, cults…: name, kind, description. |
 | `character_affiliations` | **Versioned rank & faction**: one row per character per story point, like stat versions. `faction` (blank = unaffiliated), `rank`, optional `secret_faction` (true loyalty of a spy or a traitor not yet revealed), `change_reason`. |
 | `character_titles` | **Versioned title / epithet** (*the Great*, *Greycloak*): one row per character per story point, carried forward until the next. No row yet = no title; a blank `title` = lost or stripped from that point. `change_reason`. |
@@ -59,7 +59,13 @@ FROM v_character_affiliations WHERE story_point = 'Chapter 5';
 A **title** works the same way, in `character_titles`: a character can start the story without one, earn one in Ch. 5 and lose it in Ch. 12
 (a version with a blank title). `v_character_titles` gives the title in effect at every story point.
 
-Older DBs are upgraded automatically on start: `suffix` and `nickname` are added; a fixed `characters.title` (or older `epithet`) becomes a first
+### Ages follow the story (`v_character_ages` view)
+Each character stores `age_at_start` once, and each story point can set `years_elapsed`: in-world years since the story began.
+`age = age_at_start + years_elapsed`, rounded down, for every character at every point. A blank `years_elapsed` carries forward
+from the previous point, so set it only where time passes: a one-year time skip is one edit, and every character ages together.
+Negative values work for flashbacks; the age is blank before a character is born.
+
+Older DBs are upgraded automatically on start: `characters.age` is renamed `age_at_start` and `story_points.years_elapsed` is added; `suffix` and `nickname` are added; a fixed `characters.title` (or older `epithet`) becomes a first
 `character_titles` version at the character's first stat version, and the column is dropped; and a free-text `characters.faction` is migrated: each value becomes a faction and a
 first affiliation version at the character's first stat version, and the old column is dropped.
 
@@ -126,6 +132,7 @@ JSON over HTTP, for scripts and future simulation code:
 | `GET /api/effective_stats?character_id=` | The effective stats view |
 | `GET /api/affiliations?character_id=&story_point_id=&faction_id=` | Rank & faction per story point (`faction_id` matches public or secret members) |
 | `GET /api/titles?character_id=&story_point_id=` | Title per story point |
+| `GET /api/characters/<id>/sheet` → `ages` | Age at every story point |
 | `GET /api/factions/<id>/sheet` | Faction + members per point + timeline of events |
 | `GET /api/loadouts/<id>/sheet`, `GET /api/effects/<id>/sheet` | Loadout + items; effect + modifiers |
 | `GET /api/simulate?character_id=&story_point_id=&loadouts=1,2&effects=3,4&current=1&bare=1&story_effects=1` | Loadout Lab comparison (omit `story_point_id` for latest) |

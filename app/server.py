@@ -71,6 +71,7 @@ def init_db(db_path, seed=False):
     conn = connect(db_path)
     try:
         conn.execute("PRAGMA journal_mode = DELETE")  # keep everything in the single .db file
+        migrate_before_schema(conn)
         with open(SCHEMA, encoding="utf-8") as f:
             conn.executescript(f.read())
         migrate_character_columns(conn)
@@ -91,6 +92,21 @@ def init_db(db_path, seed=False):
 
 # Columns added to characters after the first release: (name, type), in display order.
 CHARACTER_ADDED_COLUMNS = [("suffix", "TEXT"), ("nickname", "TEXT")]
+
+
+def migrate_before_schema(conn):
+    """Column changes the schema's views depend on, so they run before it:
+    characters.age became age_at_start (ages now follow the story), and
+    story_points gained years_elapsed."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='characters'").fetchone():
+        return  # new DB: the schema creates everything
+    cols = columns_of(conn, "characters")
+    if "age" in cols and "age_at_start" not in cols:
+        conn.execute("ALTER TABLE characters RENAME COLUMN age TO age_at_start")
+    elif "age_at_start" not in cols:
+        conn.execute("ALTER TABLE characters ADD COLUMN age_at_start INTEGER")
+    if "years_elapsed" not in columns_of(conn, "story_points"):
+        conn.execute("ALTER TABLE story_points ADD COLUMN years_elapsed REAL")
 
 
 def migrate_character_columns(conn):
@@ -398,7 +414,9 @@ def character_sheet(conn, char_id):
            FROM character_titles ct JOIN story_points sp ON sp.id = ct.story_point_id
            WHERE ct.character_id = ? ORDER BY sp.sequence""", (char_id,))]
     return {"character": character, "stats": stats, "equipment": equipment, "effects": effects,
-            "affiliations": affil, "titles": title_rows, "effective": effective_stats(conn, {"character_id": char_id})}
+            "affiliations": affil, "titles": title_rows,
+            "ages": [dict(r) for r in conn.execute(
+                "SELECT * FROM v_character_ages WHERE character_id = ? ORDER BY sequence", (char_id,))], "effective": effective_stats(conn, {"character_id": char_id})}
 
 
 def active_effect_rows(conn, char_id, sequence):

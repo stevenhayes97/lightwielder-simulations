@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS story_points (
     sequence    INTEGER NOT NULL UNIQUE,
     label       TEXT    NOT NULL,                 -- "Prologue", "Book 1, Ch. 3"
     arc         TEXT,                             -- optional book / arc / act grouping
+    years_elapsed REAL,                           -- in-world years since the story's start (0); drives ages.
+                                                  -- NULL = same as the previous point; negative = flashback
     description TEXT
 );
 
@@ -34,7 +36,7 @@ CREATE TABLE IF NOT EXISTS characters (
     alignment   TEXT,
     role        TEXT CHECK (role IN ('protagonist','ally','antagonist','neutral','npc')),
     status      TEXT NOT NULL DEFAULT 'alive' CHECK (status IN ('alive','dead','missing','unknown')),
-    age         INTEGER,
+    age_at_start INTEGER,                         -- age when the story starts (years_elapsed = 0); see v_character_ages
     bio         TEXT,
     notes       TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -391,3 +393,31 @@ SELECT
     ct.change_reason
 FROM pts p
 JOIN character_titles ct ON ct.id = p.title_id;
+
+
+-- ---------------------------------------------------------------------------
+-- Age of every character at every story point:
+--   age = age_at_start + years_elapsed at that point (whole years, rounded down)
+-- years_elapsed carries forward from the latest point that sets it (0 if none).
+-- age is NULL before the character is born (deep flashbacks).
+-- ---------------------------------------------------------------------------
+DROP VIEW IF EXISTS v_character_ages;
+CREATE VIEW v_character_ages AS
+WITH pts AS (
+    SELECT sp.id AS story_point_id, sp.sequence, sp.label,
+           IFNULL((SELECT s2.years_elapsed FROM story_points s2
+                    WHERE s2.sequence <= sp.sequence AND s2.years_elapsed IS NOT NULL
+                    ORDER BY s2.sequence DESC LIMIT 1), 0) AS years_elapsed
+    FROM story_points sp
+)
+SELECT
+    c.id            AS character_id,
+    c.name          AS character_name,
+    p.story_point_id,
+    p.sequence,
+    p.label         AS story_point,
+    p.years_elapsed,
+    CASE WHEN c.age_at_start + p.years_elapsed < 0 THEN NULL
+         ELSE CAST(c.age_at_start + p.years_elapsed AS INTEGER) END AS age
+FROM characters c CROSS JOIN pts p
+WHERE c.age_at_start IS NOT NULL;

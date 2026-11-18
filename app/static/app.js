@@ -55,7 +55,8 @@ async function loadLookups() {
 const charName = (id, fallback) => state.labels.characters?.get(id) ?? fallback;
 const fullName = (c) => [c.name, c.suffix].filter(Boolean).join(" ");
 // Fields shown first in forms, in this order (older DBs append new columns at the end)
-const PLACEHOLDER = { suffix: "e.g. IV, Jr.", title: "e.g. the Great", nickname: "e.g. Sandy", rank: "e.g. Knight-Captain" };
+const PLACEHOLDER = { suffix: "e.g. IV, Jr.", title: "e.g. the Great", nickname: "e.g. Sandy", rank: "e.g. Knight-Captain",
+  age_at_start: "age when the story begins", years_elapsed: "in-world years since the story began, e.g. 1.5" };
 const FIELD_ORDER = { characters: ["name", "suffix", "nickname"] };
 function orderedColumns(table) {
   const first = FIELD_ORDER[table] || [];
@@ -293,7 +294,7 @@ document.querySelectorAll("[data-close]").forEach((b) => b.onclick = () => $("#d
 // ------------------------------------------------------------------ character sheet
 async function renderCharacterSheet(id) {
   const sheet = await api("GET", `characters/${id}/sheet`);
-  const { character: ch, stats, equipment, effects: charEffects, affiliations: affils, titles, effective } = sheet;
+  const { character: ch, stats, equipment, effects: charEffects, affiliations: affils, titles, ages, effective } = sheet;
   const statById = new Map(stats.map((s) => [s.id, s]));
   const reload = () => renderCharacterSheet(id);
   const sel = state.sheetPoint?.[id];
@@ -314,6 +315,8 @@ async function renderCharacterSheet(id) {
   // title version in effect at the selected point, same rule as rank & faction
   const titleNow = pointSeq === undefined ? titles[titles.length - 1] : [...titles].reverse().find((t) => t.sequence <= pointSeq);
   const titleById = new Map(titles.map((t) => [t.id, t]));
+  // age follows the story: at the selected point, else at the story's start
+  const ageNow = point !== undefined ? ages.find((a) => a.story_point_id === point)?.age : ch.age_at_start;
 
   const fact = (k, v) => v ? `<div><div class="k">${k}</div>${esc(v)}</div>` : "";
   const cell = (e, s, prev) => {
@@ -336,7 +339,7 @@ async function renderCharacterSheet(id) {
       <a class="btn" href="#/t/characters">← Roster</a>
       <button class="btn" id="edit-char">Edit</button>
     </div>
-    <div class="detail">${fact("Class", [ch.class, ch.subclass].filter(Boolean).join(" / "))}${fact("Rank", affilNow?.rank)}${affilNow ? `<div><div class="k">Faction</div>${affilNow.faction_id ? `<a href="#/faction/${affilNow.faction_id}">${esc(affilNow.faction)}</a>` : "unaffiliated"}</div>` : ""}${affilNow?.secret_faction_id ? `<div><div class="k">Secret loyalty</div><a href="#/faction/${affilNow.secret_faction_id}">${esc(affilNow.secret_faction)}</a></div>` : ""}${fact("Alignment", ch.alignment)}${fact("Age", ch.age)}</div>
+    <div class="detail">${fact("Class", [ch.class, ch.subclass].filter(Boolean).join(" / "))}${fact("Rank", affilNow?.rank)}${affilNow ? `<div><div class="k">Faction</div>${affilNow.faction_id ? `<a href="#/faction/${affilNow.faction_id}">${esc(affilNow.faction)}</a>` : "unaffiliated"}</div>` : ""}${affilNow?.secret_faction_id ? `<div><div class="k">Secret loyalty</div><a href="#/faction/${affilNow.secret_faction_id}">${esc(affilNow.secret_faction)}</a></div>` : ""}${fact("Alignment", ch.alignment)}${fact(point !== undefined ? "Age here" : "Age at start", ageNow)}</div>
     ${ch.bio ? `<h3>Bio</h3><div class="prose">${esc(ch.bio)}</div>` : ""}
 
     <h3>Effective stats at

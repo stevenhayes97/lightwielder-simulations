@@ -1,11 +1,11 @@
 -- Placeholder sample data for trying out the UI. Safe to delete from the UI
 -- (or start fresh with: python app/server.py --reset).
-INSERT INTO story_points (id, sequence, label, arc, description) VALUES
- (1, 10, 'Prologue',       'Book 1', 'Sample: where the story opens'),
- (2, 20, 'Chapter 5',      'Book 1', 'Sample: first real fight'),
- (3, 30, 'Chapter 12',     'Book 1', 'Sample: aftermath of a setback');
+INSERT INTO story_points (id, sequence, label, arc, years_elapsed, description) VALUES
+ (1, 10, 'Prologue',       'Book 1', 0,   'Sample: where the story opens'),
+ (2, 20, 'Chapter 5',      'Book 1', 0.5, 'Sample: first real fight'),
+ (3, 30, 'Chapter 12',     'Book 1', 2,   'Sample: aftermath of a setback, two years on');
 
-INSERT INTO characters (id, name, class, race, role, status, age, bio) VALUES
+INSERT INTO characters (id, name, class, race, role, status, age_at_start, bio) VALUES
  (1, 'Sample Hero',    'Warrior', 'Human', 'protagonist', 'alive', 19, 'Placeholder protagonist.'),
  (2, 'Sample Mentor',  'Mage',    'Elf',   'ally',        'alive', 240, 'Placeholder mentor.'),
  (3, 'Sample Villain', 'Rogue',   'Human', 'antagonist',  'alive', 41, 'Placeholder antagonist.');
