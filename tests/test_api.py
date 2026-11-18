@@ -60,13 +60,18 @@ class ApiTest(unittest.TestCase):
     def test_crud_roundtrip(self):
         c = self.post("characters", {"name": "Crud Test", "class": "Ranger"})
         self.assertEqual(c["status"], "alive")
-        u = self.call("PUT", f"/api/characters/{c['id']}", {"class": "Knight", "epithet": ""}, expect=200)
+        u = self.call("PUT", f"/api/characters/{c['id']}", {"class": "Knight", "title": ""}, expect=200)
         self.assertEqual(u["class"], "Knight")
-        self.assertIsNone(u["epithet"])
+        self.assertIsNone(u["title"])
         found = self.call("GET", "/api/characters?q=crud", expect=200)
         self.assertIn(c["id"], [r["id"] for r in found])
         self.call("DELETE", f"/api/characters/{c['id']}", expect=200)
         self.call("GET", f"/api/characters/{c['id']}", expect=404)
+
+    def test_name_parts(self):
+        c = self.post("characters", {"name": "Alexander", "suffix": "IV", "title": "the Great", "nickname": "Sandy"})
+        self.assertEqual((c["suffix"], c["title"], c["nickname"]), ("IV", "the Great", "Sandy"))
+        self.call("DELETE", f"/api/characters/{c['id']}", expect=200)
 
     def test_constraint_errors_are_400(self):
         self.call("POST", "/api/characters", {"name": "X", "status": "zombie"}, expect=400)
@@ -320,14 +325,18 @@ class SeedTest(unittest.TestCase):
                     age INTEGER, bio TEXT, notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     updated_at TEXT NOT NULL DEFAULT (datetime('now')));
                 INSERT INTO story_points VALUES (1, 10, 'Start', NULL, NULL), (2, 20, 'Later', NULL, NULL);
-                INSERT INTO characters (id, name, class, faction) VALUES (1, 'A', 'Swordsman', 'Guild'),
-                                                                        (2, 'B', NULL, 'Guild'), (3, 'C', NULL, NULL);""")
+                INSERT INTO characters (id, name, epithet, class, faction) VALUES (1, 'A', 'the Bold', 'Swordsman', 'Guild'),
+                                                                        (2, 'B', NULL, NULL, 'Guild'), (3, 'C', NULL, NULL, NULL);""")
             conn.commit()
             conn.close()
             server.init_db(db)
             server.init_db(db)  # second run is a no-op
             conn = server.connect(db)
-            self.assertNotIn("faction", server.columns_of(conn, "characters"))
+            cols = server.columns_of(conn, "characters")
+            self.assertNotIn("faction", cols)
+            self.assertNotIn("epithet", cols)
+            self.assertTrue({"title", "suffix", "nickname"} <= set(cols))
+            self.assertEqual(conn.execute("SELECT title FROM characters WHERE id = 1").fetchone()[0], "the Bold")
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM factions").fetchone()[0], 1)
             rows = conn.execute("SELECT character_id, story_point_id, faction FROM v_character_affiliations "
                                 "WHERE story_point_id = 1 ORDER BY character_id").fetchall()

@@ -46,11 +46,22 @@ async function loadLookups() {
   state.labels = {};
   for (const [t, rows] of Object.entries(state.lookups)) {
     const col = state.meta[t].label;
-    state.labels[t] = new Map(rows.map((r) => [r.id, r[col]]));
+    state.labels[t] = new Map(rows.map((r) => [r.id, t === "characters" ? fullName(r) : r[col]]));
   }
   state.seq = new Map(state.lookups.story_points.map((s) => [s.id, s.sequence]));
 }
 
+// "Alexander IV the Great" (title only when asked: it's long for dropdowns)
+const charName = (id, fallback) => state.labels.characters?.get(id) ?? fallback;
+const fullName = (c, withTitle) => [c.name, c.suffix, withTitle && c.title].filter(Boolean).join(" ");
+// Fields shown first in forms, in this order (older DBs append new columns at the end)
+const PLACEHOLDER = { suffix: "e.g. IV, Jr.", title: "e.g. the Great", nickname: "e.g. Sandy", rank: "e.g. Knight-Captain" };
+const FIELD_ORDER = { characters: ["name", "suffix", "title", "nickname"] };
+function orderedColumns(table) {
+  const first = FIELD_ORDER[table] || [];
+  const cols = state.meta[table].columns;
+  return [...first.map((n) => cols.find((c) => c.name === n)).filter(Boolean), ...cols.filter((c) => !first.includes(c.name))];
+}
 const signed = (n, pct) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n)}${pct ? "%" : ""}`;
 // "+2 gear · −3 effects" (or with "base N · " prefix) from a /simulate parts entry
 function partsText(p, withBase) {
@@ -153,7 +164,7 @@ async function renderTable(table) {
       return (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y))) * sort.dir;
     });
   }
-  const cols = m.columns.filter((c) => !LIST_HIDDEN.has(c.name));
+  const cols = orderedColumns(table).filter((c) => !LIST_HIDDEN.has(c.name));
   const fkCols = m.columns.filter((c) => c.fk);
   const hasSheet = table in SHEETS;
 
@@ -227,7 +238,8 @@ function fieldHtml(table, c, value) {
   } else if (isNum(c)) {
     input = `<input type="number" id="${id}" name="${c.name}" value="${esc(v)}" step="${c.type === "REAL" ? "any" : "1"}" ${req ? "required" : ""}>`;
   } else {
-    input = `<input type="text" id="${id}" name="${c.name}" value="${esc(v)}" ${req ? "required" : ""}>`;
+    const ph = PLACEHOLDER[c.name] ? ` placeholder="${esc(PLACEHOLDER[c.name])}"` : "";
+    input = `<input type="text" id="${id}" name="${c.name}" value="${esc(v)}"${ph} ${req ? "required" : ""}>`;
   }
   const wide = TEXTAREA.has(c.name) || c.name === "change_reason" || c.name === "name";
   return `<div class="field ${wide ? "wide" : ""}">${label}${input}</div>`;
@@ -243,7 +255,7 @@ function openForm(table, row, presets, onSaved) {
   const values = {};
   for (const c of m.columns) values[c.name] = isNew ? parseDefault(c.default) : row[c.name];
   Object.assign(values, presets || {});
-  $("#drawer-fields").innerHTML = m.columns.filter((c) => !SYSTEM_COLS.has(c.name))
+  $("#drawer-fields").innerHTML = orderedColumns(table).filter((c) => !SYSTEM_COLS.has(c.name))
     .map((c) => fieldHtml(table, c, values[c.name])).join("");
   const del = $("#drawer-delete");
   del.hidden = isNew;
@@ -310,7 +322,8 @@ async function renderCharacterSheet(id) {
 
   main.innerHTML = `
     <div class="page-head">
-      <div><h1>${esc(ch.name)}${ch.epithet ? ` <span class="sub">${esc(ch.epithet)}</span>` : ""}</h1>
+      <div><h1>${esc(fullName(ch))}${ch.title ? ` <span class="sub">${esc(ch.title)}</span>` : ""}</h1>
+      ${ch.nickname ? `<div class="sub">“${esc(ch.nickname)}”</div>` : ""}
       <div class="sub">${[ch.race, ch.class, ch.subclass].filter(Boolean).map(esc).join(" · ") || "No class set"}
         <span class="badge ${ch.status === "alive" ? "on" : ch.status === "dead" ? "dead" : ""}">${esc(ch.status)}</span>
         ${ch.role ? `<span class="badge">${esc(ch.role)}</span>` : ""}</div>
@@ -387,7 +400,7 @@ async function renderCharacterSheet(id) {
   $("#add-loadout").onclick = () => openForm("loadouts", null, { character_id: id }, (saved) => saved && (location.hash = `#/loadout/${saved.id}`));
   $("#save-loadout").onclick = async () => {
     const label = state.labels.story_points.get(point);
-    const name = prompt("Name for the new loadout:", `${ch.name} @ ${label}`);
+    const name = prompt("Name for the new loadout:", `${fullName(ch)} @ ${label}`);
     if (!name) return;
     const lo = await api("POST", "loadouts", { name, character_id: id, description: `Snapshot of story gear at ${label}` });
     for (const e of equipment.filter(activeAt)) {
@@ -469,10 +482,10 @@ async function renderItemSheet(id) {
     }), "No modifiers.", ["num"])}
     <h3>Held by</h3>
     ${tableHtml(["Character", "From", "Until", "State"], holders.map((h) =>
-      `<tr><td><a href="#/character/${h.character_id}">${esc(h.character_name)}</a></td><td>${esc(h.from_label)}</td><td>${h.until_label ? esc(h.until_label) : '<span class="null">still held</span>'}</td><td>${h.equipped ? "equipped" : "carried"}</td></tr>`), "Nobody holds this item.")}
+      `<tr><td><a href="#/character/${h.character_id}">${esc(charName(h.character_id, h.character_name))}</a></td><td>${esc(h.from_label)}</td><td>${h.until_label ? esc(h.until_label) : '<span class="null">still held</span>'}</td><td>${h.equipped ? "equipped" : "carried"}</td></tr>`), "Nobody holds this item.")}
     <h3>In loadouts</h3>
     ${tableHtml(["Loadout", "Owner"], loadouts.map((l) =>
-      `<tr><td><a href="#/loadout/${l.id}">${esc(l.name)}</a></td><td>${l.character_id ? esc(l.character_name) : '<span class="badge">generic</span>'}</td></tr>`), "Not part of any loadout.")}
+      `<tr><td><a href="#/loadout/${l.id}">${esc(l.name)}</a></td><td>${l.character_id ? esc(charName(l.character_id, l.character_name)) : '<span class="badge">generic</span>'}</td></tr>`), "Not part of any loadout.")}
     ${item.lore ? `<h3>Lore</h3><div class="prose">${esc(item.lore)}</div>` : ""}`;
   $("#edit-item").onclick = () => openForm("items", item, null, (saved) => saved ? reload() : (location.hash = "#/t/items"));
   $("#add-mod").onclick = () => openForm("item_modifiers", null, { item_id: id }, reload);
@@ -545,7 +558,7 @@ async function renderEffectSheet(id) {
       "No modifiers yet.", ["num"])}
     <h3>On the timeline</h3>
     ${tableHtml(["Character", "From", "Until", "Cause"], characters.map((c) =>
-      `<tr><td><a href="#/character/${c.character_id}">${esc(c.character_name)}</a></td><td>${esc(c.from_label)}</td><td>${c.until_label ? esc(c.until_label) : '<span class="null">ongoing</span>'}</td><td class="trunc">${esc(c.cause ?? "")}</td></tr>`),
+      `<tr><td><a href="#/character/${c.character_id}">${esc(charName(c.character_id, c.character_name))}</a></td><td>${esc(c.from_label)}</td><td>${c.until_label ? esc(c.until_label) : '<span class="null">ongoing</span>'}</td><td class="trunc">${esc(c.cause ?? "")}</td></tr>`),
       "No character has this effect in the story. Apply it from a character's sheet.")}
     ${ef.notes ? `<h3>Notes</h3><div class="prose">${esc(ef.notes)}</div>` : ""}`;
   $("#edit-ef").onclick = () => openForm("effects", ef, null, (saved) => saved ? reload() : (location.hash = "#/t/effects"));
@@ -577,14 +590,14 @@ async function renderFactionSheet(id) {
     </h3>
     ${tableHtml(["Character", "Rank", "Membership"], atPoint.map((m) => {
       const open = m.faction_id === id;
-      return `<tr><td><a href="#/character/${m.character_id}">${esc(m.character_name)}</a></td><td>${esc(open ? m.rank ?? "" : "")}</td><td>${open
+      return `<tr><td><a href="#/character/${m.character_id}">${esc(charName(m.character_id, m.character_name))}</a></td><td>${esc(open ? m.rank ?? "" : "")}</td><td>${open
         ? (m.secret_faction_id ? `<span class="badge dead" title="Publicly a member, secretly loyal elsewhere">traitor: secretly ${esc(m.secret_faction)}</span>` : '<span class="badge on">member</span>')
         : `<span class="badge secret" title="Publicly ${esc(m.faction ?? "unaffiliated")}">secret member</span> <span class="null">publicly ${esc(m.faction ?? "unaffiliated")}${m.rank ? `, ${esc(m.rank)}` : ""}</span>`}</td></tr>`;
     }), "No members at this point.")}
     <h3>Timeline</h3>
     <div class="toolbar"><span class="sub">Joins, promotions, betrayals and departures, from each character's rank &amp; faction versions.</span></div>
     ${tableHtml(["Story point", "Character", "Event", "Now", "Reason"], history.map((h) =>
-      `<tr><td>${esc(h.story_point)}</td><td><a href="#/character/${h.character_id}">${esc(h.character_name)}</a></td><td><span class="badge ${bad.has(h.event) ? "dead" : h.event.includes("secret") || h.event === "went undercover" ? "secret" : "on"}">${esc(EVENT_LABEL[h.event] ?? h.event)}</span></td><td>${affilText(h, true)}</td><td class="trunc">${esc(h.change_reason ?? "")}</td></tr>`),
+      `<tr><td>${esc(h.story_point)}</td><td><a href="#/character/${h.character_id}">${esc(charName(h.character_id, h.character_name))}</a></td><td><span class="badge ${bad.has(h.event) ? "dead" : h.event.includes("secret") || h.event === "went undercover" ? "secret" : "on"}">${esc(EVENT_LABEL[h.event] ?? h.event)}</span></td><td>${affilText(h, true)}</td><td class="trunc">${esc(h.change_reason ?? "")}</td></tr>`),
       "Nobody has been in this faction yet. Add a rank / faction version on a character's sheet.")}
     ${f.notes ? `<h3>Notes</h3><div class="prose">${esc(f.notes)}</div>` : ""}`;
   $("#edit-fa").onclick = () => openForm("factions", f, null, (saved) => saved ? reload() : (location.hash = "#/t/factions"));
@@ -647,7 +660,7 @@ async function renderLab() {
     <div class="lab-controls">
       <div class="lab-row">
         <label class="lab-field">Character
-          <select id="lab-char">${chars.map((c) => `<option value="${c.id}" ${c.id === cid ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+          <select id="lab-char">${chars.map((c) => `<option value="${c.id}" ${c.id === cid ? "selected" : ""}>${esc(fullName(c))}</option>`).join("")}</select></label>
         <label class="lab-field">Base stats at
           <select id="lab-point" ${points.length ? "" : "disabled"}><option value="">Latest${points.length ? ` (${esc(points[points.length - 1].story_point)})` : ""}</option>
           ${points.map((p) => `<option value="${p.story_point_id}" ${String(lab.story_point_id) === String(p.story_point_id) ? "selected" : ""}>${esc(p.story_point)}</option>`).join("")}</select></label>
@@ -711,7 +724,7 @@ function labResult(sim) {
       ${c.situational.length ? `<div class="situational"><span class="sub">Situational:</span> ${c.situational.map((m) => `${esc(m.source)}: ${modText(m)} <i>${esc(m.condition)}</i>`).join("; ")}</div>` : ""}
     </div>`).join("");
   return `
-    <h3>${esc(sim.character.name)} @ ${esc(sim.story_point.label)}${baseNote}</h3>
+    <h3>${esc(fullName(sim.character))} @ ${esc(sim.story_point.label)}${baseNote}</h3>
     ${effLine}
     <div class="table-wrap"><table class="lab-table">
       <thead><tr><th>Stat</th><th class="num" title="Base stats with no gear and no effects">Innate</th>${head}</tr></thead>
@@ -730,7 +743,7 @@ async function renderEffective() {
     <div class="toolbar"><select id="eff-point"><option value="">All story points</option>${state.lookups.story_points.map((s) =>
       `<option value="${s.id}" ${String(pointSel) === String(s.id) ? "selected" : ""}>${esc(s.label)}</option>`).join("")}</select></div>
     ${tableHtml(["Character", "Story point", ...[...BASE_STATS, ...GEAR_STATS].map((s) => STAT_LABEL[s])],
-      shown.map((r) => `<tr><td><a href="#/character/${r.character_id}">${esc(r.character_name)}</a></td><td>${esc(r.story_point)}${r.is_snapshot ? "" : ' <span class="badge">carried</span>'}</td>${[...BASE_STATS, ...GEAR_STATS].map((s) => `<td class="num">${r[s]}</td>`).join("")}</tr>`),
+      shown.map((r) => `<tr><td><a href="#/character/${r.character_id}">${esc(charName(r.character_id, r.character_name))}</a></td><td>${esc(r.story_point)}${r.is_snapshot ? "" : ' <span class="badge">carried</span>'}</td>${[...BASE_STATS, ...GEAR_STATS].map((s) => `<td class="num">${r[s]}</td>`).join("")}</tr>`),
       "No stat versions recorded yet.", ["", ...[...BASE_STATS, ...GEAR_STATS].map(() => "num")])}`;
   $("#eff-point").onchange = (e) => { state.effPoint = e.target.value; renderEffective(); };
 }

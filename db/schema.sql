@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS story_points (
 CREATE TABLE IF NOT EXISTS characters (
     id          INTEGER PRIMARY KEY,
     name        TEXT NOT NULL,
-    epithet     TEXT,                             -- title / nickname
+    suffix      TEXT,                             -- regnal number / generational: "IV", "Jr."
+    title       TEXT,                             -- epithet: "the Great", "Greycloak"
+    nickname    TEXT,                             -- what friends call them: "Sandy"
     class       TEXT,
     subclass    TEXT,
     race        TEXT,

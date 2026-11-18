@@ -31,7 +31,7 @@ story_points ──┬──< character_stats >── characters ──< charact
 | Table | What it holds |
 |---|---|
 | `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`. |
-| `characters` | Identity that doesn't change: name, epithet, **class**, subclass, race, alignment, role, status, age, bio, notes. |
+| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `title` (*the Great*), `nickname`, **class**, subclass, race, alignment, role, status, age, bio, notes. |
 | `factions` | Kingdoms, orders, guilds, cults…: name, kind, description. |
 | `character_affiliations` | **Versioned rank & faction**: one row per character per story point, like stat versions. `faction` (blank = unaffiliated), `rank`, optional `secret_faction` (true loyalty of a spy or a traitor not yet revealed), `change_reason`. |
 | `character_stats` | **Versioned base stats**: one row per character per story point. `hp`, `strength`, `intelligence`, `stamina`, plus `change_reason`. |
@@ -55,7 +55,7 @@ SELECT character_name, rank, faction, secret_faction
 FROM v_character_affiliations WHERE story_point = 'Chapter 5';
 ```
 
-Older DBs with a free-text `characters.faction` are migrated automatically on start: each value becomes a faction and a
+Older DBs are upgraded automatically on start: `epithet` is renamed `title`, `suffix` and `nickname` are added, and a free-text `characters.faction` is migrated automatically on start: each value becomes a faction and a
 first affiliation version at the character's first stat version, and the old column is dropped.
 
 ### Effective stats (`v_effective_stats` view)
@@ -131,4 +131,6 @@ python -m unittest discover tests
 ## Roadmap ideas
 - **Skills** (swordsmanship, archery, horseback, stealth…): a `skills` catalogue plus versioned
   `character_skills (character, skill, story_point, rank)`, with item and effect modifiers able to target skills.
+- **TODO: rank hierarchy.** Ranks are free text for now. Possible next step: a per-faction `faction_ranks`
+  ladder (name + order) so promotions and demotions show up automatically on sheets and faction timelines.
 - Abilities/spells, character relationships, CSV import/export.

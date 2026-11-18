@@ -5,7 +5,7 @@ INSERT INTO story_points (id, sequence, label, arc, description) VALUES
  (2, 20, 'Chapter 5',      'Book 1', 'Sample: first real fight'),
  (3, 30, 'Chapter 12',     'Book 1', 'Sample: aftermath of a setback');
 
-INSERT INTO characters (id, name, epithet, class, race, role, status, age, bio) VALUES
+INSERT INTO characters (id, name, title, class, race, role, status, age, bio) VALUES
  (1, 'Sample Hero',    'the Untested', 'Warrior', 'Human', 'protagonist', 'alive', 19, 'Placeholder protagonist.'),
  (2, 'Sample Mentor',  'Greycloak',    'Mage',    'Elf',   'ally',        'alive', 240, 'Placeholder mentor.'),
  (3, 'Sample Villain', NULL,           'Rogue',   'Human', 'antagonist',  'alive', 41, 'Placeholder antagonist.');
@@ -13,6 +13,9 @@ INSERT INTO characters (id, name, epithet, class, race, role, status, age, bio) 
 INSERT INTO factions (id, name, kind, description) VALUES
  (1, 'Example Order', 'order', 'Sample: the knightly order the heroes serve'),
  (2, 'Example Cult',  'cult',  'Sample: the shadowy antagonists');
+
+UPDATE characters SET nickname = 'Grey' WHERE id = 2;
+UPDATE characters SET suffix = 'III', title = 'the Hollow' WHERE id = 3;
 
 -- Rank & faction versions. The mentor is secretly turned by Chapter 5 and
 -- openly defects in Chapter 12; the hero is promoted along the way.

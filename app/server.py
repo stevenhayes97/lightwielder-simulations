@@ -72,6 +72,7 @@ def init_db(db_path, seed=False):
         conn.execute("PRAGMA journal_mode = DELETE")  # keep everything in the single .db file
         with open(SCHEMA, encoding="utf-8") as f:
             conn.executescript(f.read())
+        migrate_character_columns(conn)
         migrate_character_faction(conn)
         if seed:
             empty = conn.execute("SELECT COUNT(*) FROM characters").fetchone()[0] == 0
@@ -84,6 +85,23 @@ def init_db(db_path, seed=False):
         conn.commit()
     finally:
         conn.close()
+
+
+# Columns added to characters after the first release: (name, type), in display order.
+CHARACTER_ADDED_COLUMNS = [("suffix", "TEXT"), ("title", "TEXT"), ("nickname", "TEXT")]
+
+
+def migrate_character_columns(conn):
+    """Bring older characters tables up to date: `epithet` was renamed `title`,
+    and suffix / nickname were added. New columns go at the end of the table on
+    old DBs; the UI orders the form fields itself."""
+    cols = columns_of(conn, "characters")
+    if "epithet" in cols and "title" not in cols:
+        conn.execute("ALTER TABLE characters RENAME COLUMN epithet TO title")
+        cols = columns_of(conn, "characters")
+    for name, typ in CHARACTER_ADDED_COLUMNS:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE characters ADD COLUMN {name} {typ}")
 
 
 def migrate_character_faction(conn):
