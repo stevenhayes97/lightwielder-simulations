@@ -30,12 +30,15 @@ story_points ──┬──< character_stats >── characters ──< charact
 
 | Table | What it holds |
 |---|---|
-| `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`. |
-| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `title` (*the Great*), `nickname`, **class**, subclass, race, alignment, role, status, age, bio, notes. |
+| `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`, `years_elapsed` (in-world years since the story began; drives ages). |
+| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, appearance (`height`, `build`, `hair`, `eyes`), `personality`, `goals`, alignment, role, status, `age_at_start`, bio, notes. |
 | `factions` | Kingdoms, orders, guilds, cults…: name, kind, description. |
 | `character_affiliations` | **Versioned rank & faction**: one row per character per story point, like stat versions. `faction` (blank = unaffiliated), `rank`, optional `secret_faction` (true loyalty of a spy or a traitor not yet revealed), `change_reason`. |
+| `character_titles` | **Versioned title / epithet** (*the Great*, *Greycloak*): one row per character per story point, carried forward until the next. No row yet = no title; a blank `title` = lost or stripped from that point. `change_reason`. |
+| `skills` | Skill catalogue: swordsmanship, history, a language, calling the Light…: name, category, description. |
+| `character_skills` | **Versioned skill levels**: one row per character per skill per story point, carried forward. `level`: untrained, novice, skilled, adept, expert, master, legendary. |
 | `character_stats` | **Versioned base stats**: one row per character per story point. `hp`, `strength`, `intelligence`, `stamina`, plus `change_reason`. |
-| `items` | Gear catalogue: category, slot, rarity, damage + type, armor rating, weight, value, strength requirement, description, lore. |
+| `items` | Gear catalogue: category, slot, `layer` (under / main / over), rarity, damage + type, armor rating, weight, value, strength requirement, description, lore. |
 | `item_modifiers` | Buffs/debuffs per item: target stat, `flat` or `percent`, amount (negative = debuff), optional `condition`. |
 | `character_equipment` | Who holds what **over a span of the story**: `from_story_point` up to (not including) `until_story_point`; blank = still held. `equipped` = 0 means carried or stashed, with no effect on stats. |
 | `loadouts` | Pre-built gear sets for "what if" comparisons. Set `character` for a personal loadout, or leave it blank for a **generic** loadout anyone can use. They don't change the story timeline. |
@@ -55,7 +58,27 @@ SELECT character_name, rank, faction, secret_faction
 FROM v_character_affiliations WHERE story_point = 'Chapter 5';
 ```
 
-Older DBs are upgraded automatically on start: `epithet` is renamed `title`, `suffix` and `nickname` are added, and a free-text `characters.faction` is migrated: each value becomes a faction and a
+A **title** works the same way, in `character_titles`: a character can start the story without one, earn one in Ch. 5 and lose it in Ch. 12
+(a version with a blank title). `v_character_titles` gives the title in effect at every story point.
+
+### Armor layers
+Each slot holds one item **per layer**: `under` (mail, padding), `main` (the default; blank means main) and `over`
+(surcoat, tabard). Mail hauberk (chest, under) + breastplate (chest, main) + surcoat (chest, over) is a valid set; two
+`main` chest pieces still warn in the Loadout Lab. Every layer adds its armor rating and modifiers.
+
+### Skills
+`character_skills` works like stat versions, but per skill: record a level where it changes (*Calling the Light*:
+untrained in Ch. I, novice in Ch. 9). `v_character_skills` gives every skill's level at every story point; the character
+sheet shows the levels at the selected point and the history.
+
+### Ages follow the story (`v_character_ages` view)
+Each character stores `age_at_start` once, and each story point can set `years_elapsed`: in-world years since the story began.
+`age = age_at_start + years_elapsed`, rounded down, for every character at every point. A blank `years_elapsed` carries forward
+from the previous point, so set it only where time passes: a one-year time skip is one edit, and every character ages together.
+Negative values work for flashbacks; the age is blank before a character is born.
+
+Older DBs are upgraded automatically on start: `characters.age` is renamed `age_at_start` and `story_points.years_elapsed` is added; `suffix` and `nickname` are added; a fixed `characters.title` (or older `epithet`) becomes a first
+`character_titles` version at the character's first stat version, and the column is dropped; and a free-text `characters.faction` is migrated: each value becomes a faction and a
 first affiliation version at the character's first stat version, and the old column is dropped.
 
 ### Effective stats (`v_effective_stats` view)
@@ -79,6 +102,7 @@ FROM v_effective_stats WHERE story_point = 'Chapter 5';
 - **Table views** for every table: search, filters on related records, sortable columns, click a row to edit, **+ New** to create. Forms are built from the live schema, with dropdowns for related records and fixed choice lists.
 - **Character sheet** (Characters → *Sheet →*): stat cards at any story point with a base / gear / effects breakdown, gear and effects active at that point,
   **+ Apply effect** to put a buff or debuff on the timeline, effect history, a progression table with ▲▼ changes, equipment history, and quick **+ Stat version** (copies the latest numbers) and **+ Give item**.
+- The character sheet shows the **title** in effect at the selected story point and a **title history** (**+ Title version**).
 - The character sheet also shows **rank & faction** at the selected story point (including a secret loyalty) and a
   **rank & faction history**. **+ Rank / faction version** copies the latest values so you only change what moved.
 - **Faction sheet** (Factions → *Sheet →*): members at any story point (open members, secret members, and traitors inside the faction)
@@ -119,6 +143,8 @@ JSON over HTTP, for scripts and future simulation code:
 | `GET /api/items/<id>/sheet` | Item + modifiers + holders |
 | `GET /api/effective_stats?character_id=` | The effective stats view |
 | `GET /api/affiliations?character_id=&story_point_id=&faction_id=` | Rank & faction per story point (`faction_id` matches public or secret members) |
+| `GET /api/titles?character_id=&story_point_id=` | Title per story point |
+| `GET /api/characters/<id>/sheet` → `ages` | Age at every story point |
 | `GET /api/factions/<id>/sheet` | Faction + members per point + timeline of events |
 | `GET /api/loadouts/<id>/sheet`, `GET /api/effects/<id>/sheet` | Loadout + items; effect + modifiers |
 | `GET /api/simulate?character_id=&story_point_id=&loadouts=1,2&effects=3,4&current=1&bare=1&story_effects=1` | Loadout Lab comparison (omit `story_point_id` for latest) |
@@ -129,8 +155,15 @@ python -m unittest discover tests
 ```
 
 ## Roadmap ideas
-- **Skills** (swordsmanship, archery, horseback, stealth…): a `skills` catalogue plus versioned
-  `character_skills (character, skill, story_point, rank)`, with item and effect modifiers able to target skills.
+- **Skill modifiers**: let item and effect modifiers target skills, not just stats.
 - **TODO: rank hierarchy.** Ranks are free text for now. Possible next step: a per-faction `faction_ranks`
   ladder (name + order) so promotions and demotions show up automatically on sheets and faction timelines.
+- **TODO: alignment as free-form text.** `characters.alignment` is a one-line field built for labels like
+  *Lawful Good*. Replace it, or add a field next to it, with a free-form description of the character's moral outlook
+  (beliefs, lines they won't cross, contradictions), shown as a multi-line box. Consider versioning it per story point,
+  like titles, so the outlook can shift with the story.
+- **TODO: hit locations and lethal wounds.** HP is deliberately low for humans (about 10 is average), and some hits
+  should kill outright, whatever the HP. Possible shape: a `body_zones` table (head, neck, heart, torso, arms, legs…)
+  with an `instant_death` flag and a damage multiplier, armor that protects specific zones (via `items.slot`), and
+  race-level defaults so races can differ (e.g. humans low HP, others hardier or without a vital zone).
 - Abilities/spells, character relationships, CSV import/export.

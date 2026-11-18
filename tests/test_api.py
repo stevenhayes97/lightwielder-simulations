@@ -60,18 +60,97 @@ class ApiTest(unittest.TestCase):
     def test_crud_roundtrip(self):
         c = self.post("characters", {"name": "Crud Test", "class": "Ranger"})
         self.assertEqual(c["status"], "alive")
-        u = self.call("PUT", f"/api/characters/{c['id']}", {"class": "Knight", "title": ""}, expect=200)
+        u = self.call("PUT", f"/api/characters/{c['id']}", {"class": "Knight", "nickname": ""}, expect=200)
         self.assertEqual(u["class"], "Knight")
-        self.assertIsNone(u["title"])
+        self.assertIsNone(u["nickname"])
         found = self.call("GET", "/api/characters?q=crud", expect=200)
         self.assertIn(c["id"], [r["id"] for r in found])
         self.call("DELETE", f"/api/characters/{c['id']}", expect=200)
         self.call("GET", f"/api/characters/{c['id']}", expect=404)
 
     def test_name_parts(self):
-        c = self.post("characters", {"name": "Alexander", "suffix": "IV", "title": "the Great", "nickname": "Sandy"})
-        self.assertEqual((c["suffix"], c["title"], c["nickname"]), ("IV", "the Great", "Sandy"))
+        c = self.post("characters", {"name": "Alexander", "suffix": "IV", "nickname": "Sandy"})
+        self.assertEqual((c["suffix"], c["nickname"]), ("IV", "Sandy"))
+        self.call("POST", "/api/characters", {"name": "X", "title": "the Great"}, expect=400)  # titles are versioned
         self.call("DELETE", f"/api/characters/{c['id']}", expect=200)
+
+    def test_ages_follow_story(self):
+        pts = [self.post("story_points", {"sequence": 8000 + i, "label": f"Age pt {i}", "years_elapsed": y})
+               for i, y in enumerate([-20, 0, None, 1.5, None])]
+        cid = self.post("characters", {"name": "Age Test", "age_at_start": 19})["id"]
+        ages = {a["story_point"]: a["age"] for a in
+                self.call("GET", f"/api/characters/{cid}/sheet", expect=200)["ages"]}
+        self.assertIsNone(ages["Age pt 0"])           # flashback before birth
+        self.assertEqual(ages["Age pt 1"], 19)
+        self.assertEqual(ages["Age pt 2"], 19)        # blank = carried forward
+        self.assertEqual(ages["Age pt 3"], 20)        # 19 + 1.5, rounded down
+        self.assertEqual(ages["Age pt 4"], 20)
+        self.call("DELETE", f"/api/characters/{cid}", expect=200)
+        for p in pts:
+            self.call("DELETE", f"/api/story_points/{p['id']}", expect=200)
+
+    def test_armor_layers(self):
+        sp = self.post("story_points", {"sequence": 9000, "label": "Layer pt"})
+        cid = self.post("characters", {"name": "Layer Test", "height": "6'1\"", "personality": "Brave"})["id"]
+        self.post("character_stats", {"character_id": cid, "story_point_id": sp["id"]})
+        ids = {n: self.post("items", {"name": n, "category": "armor", "slot": "chest", "layer": l, "armor_rating": 1})["id"]
+               for n, l in [("Mail", "under"), ("Plate", "main"), ("Surcoat", "over"), ("Coat", None)]}
+        lo = self.post("loadouts", {"name": "Layered", "character_id": cid})["id"]
+        for n in ("Mail", "Plate", "Surcoat"):
+            self.post("loadout_items", {"loadout_id": lo, "item_id": ids[n]})
+        lo2 = self.post("loadouts", {"name": "Clash", "character_id": cid})["id"]
+        for n in ("Plate", "Coat"):  # blank layer = main, so these collide
+            self.post("loadout_items", {"loadout_id": lo2, "item_id": ids[n]})
+        sim = self.call("GET", f"/api/simulate?character_id={cid}&story_point_id={sp['id']}&loadouts={lo},{lo2}", expect=200)
+        cols = {c["label"]: c for c in sim["columns"]}
+        self.assertEqual(cols["Layered"]["warnings"], [])
+        self.assertEqual(cols["Layered"]["stats"]["armor"], 3)
+        self.assertIn("Slot 'chest' holds 2 items", " ".join(cols["Clash"]["warnings"]))
+        self.call("POST", "/api/items", {"name": "X", "layer": "sideways"}, expect=400)
+        self.assertEqual(self.call("GET", f"/api/characters/{cid}", expect=200)["height"], "6'1\"")
+        self.call("DELETE", f"/api/characters/{cid}", expect=200)
+
+    def test_skill_versions(self):
+        p = [self.post("story_points", {"sequence": 9100 + i, "label": f"Skill pt {i}"}) for i in range(3)]
+        cid = self.post("characters", {"name": "Skill Test"})["id"]
+        blade = self.post("skills", {"name": "Test Blades", "category": "combat"})["id"]
+        light = self.post("skills", {"name": "Test Light", "category": "magic"})["id"]
+        self.post("character_skills", {"character_id": cid, "skill_id": blade, "story_point_id": p[0]["id"], "level": "adept"})
+        self.post("character_skills", {"character_id": cid, "skill_id": light, "story_point_id": p[0]["id"], "level": "untrained"})
+        self.post("character_skills", {"character_id": cid, "skill_id": light, "story_point_id": p[2]["id"], "level": "novice"})
+        self.call("POST", "/api/character_skills", {"character_id": cid, "skill_id": blade,
+                                                    "story_point_id": p[0]["id"]}, expect=400)  # one version per point
+        self.call("POST", "/api/character_skills", {"character_id": cid, "skill_id": blade,
+                                                    "story_point_id": p[1]["id"], "level": "godlike"}, expect=400)
+        self.call("POST", "/api/skills", {"name": "Test Blades"}, expect=400)  # unique
+        sheet = self.call("GET", f"/api/characters/{cid}/sheet", expect=200)
+        self.assertEqual([(s["skill"], s["level"]) for s in sheet["skills"]],
+                         [("Test Blades", "adept"), ("Test Light", "untrained"), ("Test Light", "novice")])
+        import sqlite3
+        conn = sqlite3.connect(self.db)
+        rows = conn.execute("SELECT story_point, skill, level FROM v_character_skills WHERE character_id = ? "
+                            "ORDER BY sequence, skill", (cid,)).fetchall()
+        conn.close()
+        self.assertEqual(rows, [("Skill pt 0", "Test Blades", "adept"), ("Skill pt 0", "Test Light", "untrained"),
+                                ("Skill pt 1", "Test Blades", "adept"), ("Skill pt 1", "Test Light", "untrained"),
+                                ("Skill pt 2", "Test Blades", "adept"), ("Skill pt 2", "Test Light", "novice")])
+        self.call("DELETE", f"/api/characters/{cid}", expect=200)
+
+    def test_title_versions(self):
+        p = [self.post("story_points", {"sequence": 7000 + i, "label": f"Title pt {i}"}) for i in range(4)]
+        cid = self.post("characters", {"name": "Title Test"})["id"]
+        self.post("character_titles", {"character_id": cid, "story_point_id": p[1]["id"], "title": "the Bold"})
+        self.post("character_titles", {"character_id": cid, "story_point_id": p[3]["id"], "title": "",
+                                       "change_reason": "Stripped"})
+        self.call("POST", "/api/character_titles", {"character_id": cid, "story_point_id": p[1]["id"]}, expect=400)
+        rows = {r["story_point"]: r for r in self.call("GET", f"/api/titles?character_id={cid}", expect=200)}
+        self.assertNotIn("Title pt 0", rows)                      # no title before the first version
+        self.assertEqual(rows["Title pt 1"]["title"], "the Bold")
+        self.assertEqual((rows["Title pt 2"]["title"], rows["Title pt 2"]["is_snapshot"]), ("the Bold", 0))  # carried
+        self.assertIsNone(rows["Title pt 3"]["title"])            # lost
+        sheet = self.call("GET", f"/api/characters/{cid}/sheet", expect=200)
+        self.assertEqual([t["title"] for t in sheet["titles"]], ["the Bold", None])
+        self.call("DELETE", f"/api/characters/{cid}", expect=200)
 
     def test_constraint_errors_are_400(self):
         self.call("POST", "/api/characters", {"name": "X", "status": "zombie"}, expect=400)
@@ -311,6 +390,8 @@ class SeedTest(unittest.TestCase):
             self.assertEqual([tuple(r) for r in mentor], [("Example Order", "Archmage", None),
                                                           ("Example Order", "Archmage", "Example Cult"),
                                                           ("Example Cult", "Herald", None)])
+            hero = conn.execute("SELECT title FROM v_character_titles WHERE character_id=1 ORDER BY sequence").fetchall()
+            self.assertEqual([r[0] for r in hero], ["the Untested", None, "the Unbroken"])
             conn.close()
 
     def test_migrates_old_faction_column(self):
@@ -335,8 +416,13 @@ class SeedTest(unittest.TestCase):
             cols = server.columns_of(conn, "characters")
             self.assertNotIn("faction", cols)
             self.assertNotIn("epithet", cols)
-            self.assertTrue({"title", "suffix", "nickname"} <= set(cols))
-            self.assertEqual(conn.execute("SELECT title FROM characters WHERE id = 1").fetchone()[0], "the Bold")
+            self.assertNotIn("title", cols)
+            self.assertIn("age_at_start", cols)
+            self.assertNotIn("age", cols)
+            self.assertTrue({"suffix", "nickname", "height", "build", "hair", "eyes", "personality", "goals"} <= set(cols))
+            self.assertIn("layer", server.columns_of(conn, "items"))
+            self.assertEqual([tuple(r) for r in conn.execute("SELECT character_id, story_point_id, title FROM character_titles")],
+                             [(1, 1, "the Bold")])
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM factions").fetchone()[0], 1)
             rows = conn.execute("SELECT character_id, story_point_id, faction FROM v_character_affiliations "
                                 "WHERE story_point_id = 1 ORDER BY character_id").fetchall()
