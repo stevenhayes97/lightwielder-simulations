@@ -18,16 +18,19 @@ CREATE TABLE IF NOT EXISTS story_points (
 );
 
 -- ---------------------------------------------------------------------------
--- Character roster: identity info that rarely changes
+-- Character roster: identity info that rarely changes.
+-- Class / subclass are fixed identity ("swordsman"). Rank and faction change
+-- with the story, so they live in character_affiliations (versioned) instead.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS characters (
     id          INTEGER PRIMARY KEY,
     name        TEXT NOT NULL,
-    epithet     TEXT,                             -- title / nickname
+    suffix      TEXT,                             -- regnal number / generational: "IV", "Jr."
+    title       TEXT,                             -- epithet: "the Great", "Greycloak"
+    nickname    TEXT,                             -- what friends call them: "Sandy"
     class       TEXT,
     subclass    TEXT,
     race        TEXT,
-    faction     TEXT,
     alignment   TEXT,
     role        TEXT CHECK (role IN ('protagonist','ally','antagonist','neutral','npc')),
     status      TEXT NOT NULL DEFAULT 'alive' CHECK (status IN ('alive','dead','missing','unknown')),
@@ -59,6 +62,39 @@ CREATE TABLE IF NOT EXISTS character_stats (
     change_reason   TEXT,                         -- why the stats moved ("trained", "wounded")
     notes           TEXT,
     UNIQUE (character_id, story_point_id)
+);
+
+-- ---------------------------------------------------------------------------
+-- Factions: kingdoms, orders, guilds, cults... Members are recorded over time
+-- in character_affiliations.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS factions (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL UNIQUE,
+    kind         TEXT,                            -- kingdom / order / guild / cult / army / house
+    description  TEXT,
+    notes        TEXT
+);
+
+-- ---------------------------------------------------------------------------
+-- Versioned rank & faction: one row per character per story point, like
+-- character_stats. A version carries forward until the next one, so record a
+-- new version only where something changes (promotion, defection, treachery).
+--   faction_id         NULL = unaffiliated (exile, deserter, free agent)
+--   secret_faction_id  true loyalty when it differs from the public faction
+--                      (spy, double agent, traitor not yet revealed)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS character_affiliations (
+    id                 INTEGER PRIMARY KEY,
+    character_id       INTEGER NOT NULL REFERENCES characters(id)   ON DELETE CASCADE,
+    story_point_id     INTEGER NOT NULL REFERENCES story_points(id) ON DELETE RESTRICT,
+    faction_id         INTEGER          REFERENCES factions(id)     ON DELETE RESTRICT,
+    rank               TEXT,                      -- "Squire", "Knight-Captain", "Herald"
+    secret_faction_id  INTEGER          REFERENCES factions(id)     ON DELETE RESTRICT,
+    change_reason      TEXT,                      -- "promoted after the siege", "betrayed the Order"
+    notes              TEXT,
+    UNIQUE (character_id, story_point_id),
+    CHECK (secret_faction_id IS NULL OR faction_id IS NULL OR secret_faction_id <> faction_id)
 );
 
 -- ---------------------------------------------------------------------------
@@ -178,6 +214,8 @@ CREATE TABLE IF NOT EXISTS character_effects (
 );
 
 CREATE INDEX IF NOT EXISTS idx_char_effects  ON character_effects(character_id);
+CREATE INDEX IF NOT EXISTS idx_affil_char    ON character_affiliations(character_id);
+CREATE INDEX IF NOT EXISTS idx_affil_faction ON character_affiliations(faction_id);
 CREATE INDEX IF NOT EXISTS idx_loadouts_char ON loadouts(character_id);
 CREATE INDEX IF NOT EXISTS idx_loadout_items ON loadout_items(loadout_id);
 CREATE INDEX IF NOT EXISTS idx_effect_mods   ON effect_modifiers(effect_id);
@@ -276,3 +314,36 @@ JOIN characters      c  ON c.id  = b.character_id
 JOIN character_stats cs ON cs.id = b.stats_id
 LEFT JOIN g             ON g.character_id  = b.character_id AND g.story_point_id  = b.story_point_id
 LEFT JOIN armor_base ab ON ab.character_id = b.character_id AND ab.story_point_id = b.story_point_id;
+
+
+-- ---------------------------------------------------------------------------
+-- Rank & faction for every (character, story point) from the character's first
+-- affiliation version onward, carried forward like base stats.
+-- ---------------------------------------------------------------------------
+DROP VIEW IF EXISTS v_character_affiliations;
+CREATE VIEW v_character_affiliations AS
+WITH pts AS (
+    SELECT c.id AS character_id, c.name AS character_name, sp.id AS story_point_id, sp.sequence, sp.label,
+           (SELECT ca.id FROM character_affiliations ca JOIN story_points s2 ON s2.id = ca.story_point_id
+             WHERE ca.character_id = c.id AND s2.sequence <= sp.sequence
+             ORDER BY s2.sequence DESC LIMIT 1) AS affiliation_id
+    FROM characters c CROSS JOIN story_points sp
+)
+SELECT
+    p.character_id,
+    p.character_name,
+    p.story_point_id,
+    p.sequence,
+    p.label                               AS story_point,
+    p.affiliation_id,                             -- the version in effect
+    (ca.story_point_id = p.story_point_id) AS is_snapshot,
+    ca.faction_id,
+    f.name                                AS faction,
+    ca.rank,
+    ca.secret_faction_id,
+    sf.name                               AS secret_faction,
+    ca.change_reason
+FROM pts p
+JOIN character_affiliations ca ON ca.id = p.affiliation_id
+LEFT JOIN factions f  ON f.id  = ca.faction_id
+LEFT JOIN factions sf ON sf.id = ca.secret_faction_id;

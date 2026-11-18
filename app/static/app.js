@@ -36,7 +36,7 @@ function toast(msg) {
 }
 
 // Tables that have their own "sheet" page, keyed by table -> route word
-const SHEETS = { characters: "character", items: "item", loadouts: "loadout", effects: "effect" };
+const SHEETS = { characters: "character", items: "item", loadouts: "loadout", effects: "effect", factions: "faction" };
 
 async function loadLookups() {
   // every table with a label column is used to show FK values by name
@@ -46,11 +46,22 @@ async function loadLookups() {
   state.labels = {};
   for (const [t, rows] of Object.entries(state.lookups)) {
     const col = state.meta[t].label;
-    state.labels[t] = new Map(rows.map((r) => [r.id, r[col]]));
+    state.labels[t] = new Map(rows.map((r) => [r.id, t === "characters" ? fullName(r) : r[col]]));
   }
   state.seq = new Map(state.lookups.story_points.map((s) => [s.id, s.sequence]));
 }
 
+// "Alexander IV the Great" (title only when asked: it's long for dropdowns)
+const charName = (id, fallback) => state.labels.characters?.get(id) ?? fallback;
+const fullName = (c, withTitle) => [c.name, c.suffix, withTitle && c.title].filter(Boolean).join(" ");
+// Fields shown first in forms, in this order (older DBs append new columns at the end)
+const PLACEHOLDER = { suffix: "e.g. IV, Jr.", title: "e.g. the Great", nickname: "e.g. Sandy", rank: "e.g. Knight-Captain" };
+const FIELD_ORDER = { characters: ["name", "suffix", "title", "nickname"] };
+function orderedColumns(table) {
+  const first = FIELD_ORDER[table] || [];
+  const cols = state.meta[table].columns;
+  return [...first.map((n) => cols.find((c) => c.name === n)).filter(Boolean), ...cols.filter((c) => !first.includes(c.name))];
+}
 const signed = (n, pct) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n)}${pct ? "%" : ""}`;
 // "+2 gear · −3 effects" (or with "base N · " prefix) from a /simulate parts entry
 function partsText(p, withBase) {
@@ -60,6 +71,19 @@ function partsText(p, withBase) {
   if (p.effect_flat) bits.push(`${signed(p.effect_flat)} effects`);
   if (p.effect_pct) bits.push(`${signed(p.effect_pct, true)} effects`);
   return bits.join(" · ");
+}
+// "Knight · Example Order" (+ " (secretly Example Cult)") from an affiliation row
+function affilText(a, html) {
+  if (!a) return "";
+  const name = (fid) => state.labels.factions?.get(fid) ?? `#${fid}`;
+  const faction = a.faction_id ? (a.faction ?? name(a.faction_id)) : "unaffiliated";
+  const link = (fid, label) => html && fid ? `<a href="#/faction/${fid}">${esc(label)}</a>` : html ? esc(label) : label;
+  let t = [a.rank && (html ? esc(a.rank) : a.rank), link(a.faction_id, faction)].filter(Boolean).join(" · ");
+  if (a.secret_faction_id) {
+    const sec = link(a.secret_faction_id, a.secret_faction ?? name(a.secret_faction_id));
+    t += html ? ` <span class="badge secret" title="True loyalty, hidden from others">secretly ${sec}</span>` : ` (secretly ${sec})`;
+  }
+  return t;
 }
 const modText = (m) => `${signed(m.amount, m.mod_type === "percent")} ${STAT_LABEL[m.stat] || m.stat}`;
 
@@ -80,6 +104,7 @@ function fmtCell(table, col, v) {
 function rowLabel(table, row) {
   const col = state.meta[table].label;
   if (col && row[col]) return row[col];
+  if (table === "character_affiliations") return `${state.labels.characters.get(row.character_id)} @ ${state.labels.story_points.get(row.story_point_id)}: ${affilText(row)}`;
   if (table === "character_stats") return `${state.labels.characters.get(row.character_id)} @ ${state.labels.story_points.get(row.story_point_id)}`;
   if (table === "character_equipment") return `${state.labels.items.get(row.item_id)} → ${state.labels.characters.get(row.character_id)}`;
   if (table === "item_modifiers") return `${state.labels.items.get(row.item_id)}: ${modText(row)}`;
@@ -91,7 +116,7 @@ function rowLabel(table, row) {
 
 // ------------------------------------------------------------------ nav / routing
 const NAV_GROUPS = [
-  ["Roster", ["characters", "character_stats", "story_points"]],
+  ["Roster", ["characters", "character_stats", "character_affiliations", "factions", "story_points"]],
   ["Gear", ["items", "item_modifiers", "character_equipment"]],
   ["Effects", ["effects", "effect_modifiers", "character_effects"]],
   ["Loadouts", ["loadouts", "loadout_items"]],
@@ -112,6 +137,7 @@ async function route() {
     else if (kind === "item") { renderNav("items"); await renderItemSheet(+arg); }
     else if (kind === "loadout") { renderNav("loadouts"); await renderLoadoutSheet(+arg); }
     else if (kind === "effect") { renderNav("effects"); await renderEffectSheet(+arg); }
+    else if (kind === "faction") { renderNav("factions"); await renderFactionSheet(+arg); }
     else if (kind === "lab") { renderNav("lab"); await renderLab(); }
     else if (arg === "effective") { renderNav("effective"); await renderEffective(); }
     else if (state.meta[arg]) { renderNav(arg); await renderTable(arg); }
@@ -138,7 +164,7 @@ async function renderTable(table) {
       return (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y))) * sort.dir;
     });
   }
-  const cols = m.columns.filter((c) => !LIST_HIDDEN.has(c.name));
+  const cols = orderedColumns(table).filter((c) => !LIST_HIDDEN.has(c.name));
   const fkCols = m.columns.filter((c) => c.fk);
   const hasSheet = table in SHEETS;
 
@@ -202,7 +228,7 @@ function fieldHtml(table, c, value) {
   if (c.fk) {
     const opts = state.lookups[c.fk.table].map((r) =>
       `<option value="${r.id}" ${String(v) === String(r.id) ? "selected" : ""}>${esc(state.labels[c.fk.table].get(r.id))}${c.fk.table === "story_points" ? ` (${r.sequence})` : ""}</option>`).join("");
-    const blank = c.notnull ? `<option value="" disabled ${v === "" ? "selected" : ""}>Choose…</option>` : `<option value="">${c.name.startsWith("until") ? (table === "character_effects" ? "- ongoing -" : "- still held -") : c.name === "character_id" ? "- generic (any character) -" : "-"}</option>`;
+    const blank = c.notnull ? `<option value="" disabled ${v === "" ? "selected" : ""}>Choose…</option>` : `<option value="">${c.name === "faction_id" ? "- unaffiliated -" : c.name === "secret_faction_id" ? "- none -" : c.name.startsWith("until") ? (table === "character_effects" ? "- ongoing -" : "- still held -") : c.name === "character_id" ? "- generic (any character) -" : "-"}</option>`;
     input = `<select id="${id}" name="${c.name}" ${req ? "required" : ""}>${blank}${opts}</select>`;
   } else if (c.options) {
     input = `<select id="${id}" name="${c.name}">${c.notnull ? "" : '<option value="">-</option>'}${c.options.map((o) =>
@@ -212,7 +238,8 @@ function fieldHtml(table, c, value) {
   } else if (isNum(c)) {
     input = `<input type="number" id="${id}" name="${c.name}" value="${esc(v)}" step="${c.type === "REAL" ? "any" : "1"}" ${req ? "required" : ""}>`;
   } else {
-    input = `<input type="text" id="${id}" name="${c.name}" value="${esc(v)}" ${req ? "required" : ""}>`;
+    const ph = PLACEHOLDER[c.name] ? ` placeholder="${esc(PLACEHOLDER[c.name])}"` : "";
+    input = `<input type="text" id="${id}" name="${c.name}" value="${esc(v)}"${ph} ${req ? "required" : ""}>`;
   }
   const wide = TEXTAREA.has(c.name) || c.name === "change_reason" || c.name === "name";
   return `<div class="field ${wide ? "wide" : ""}">${label}${input}</div>`;
@@ -228,7 +255,7 @@ function openForm(table, row, presets, onSaved) {
   const values = {};
   for (const c of m.columns) values[c.name] = isNew ? parseDefault(c.default) : row[c.name];
   Object.assign(values, presets || {});
-  $("#drawer-fields").innerHTML = m.columns.filter((c) => !SYSTEM_COLS.has(c.name))
+  $("#drawer-fields").innerHTML = orderedColumns(table).filter((c) => !SYSTEM_COLS.has(c.name))
     .map((c) => fieldHtml(table, c, values[c.name])).join("");
   const del = $("#drawer-delete");
   del.hidden = isNew;
@@ -265,7 +292,7 @@ document.querySelectorAll("[data-close]").forEach((b) => b.onclick = () => $("#d
 // ------------------------------------------------------------------ character sheet
 async function renderCharacterSheet(id) {
   const sheet = await api("GET", `characters/${id}/sheet`);
-  const { character: ch, stats, equipment, effects: charEffects, effective } = sheet;
+  const { character: ch, stats, equipment, effects: charEffects, affiliations: affils, effective } = sheet;
   const statById = new Map(stats.map((s) => [s.id, s]));
   const reload = () => renderCharacterSheet(id);
   const sel = state.sheetPoint?.[id];
@@ -280,6 +307,9 @@ async function renderCharacterSheet(id) {
   const sim = cur ? await api("GET", `simulate?character_id=${id}&story_point_id=${point}&current=1&story_effects=1`) : null;
   const parts = sim?.columns[0]?.parts;
   const activeEffects = charEffects.filter(activeAt);
+  // rank & faction version in effect at the selected point (latest one if no stat point is selected)
+  const affilNow = pointSeq === undefined ? affils[affils.length - 1] : [...affils].reverse().find((a) => a.sequence <= pointSeq);
+  const affilById = new Map(affils.map((a) => [a.id, a]));
 
   const fact = (k, v) => v ? `<div><div class="k">${k}</div>${esc(v)}</div>` : "";
   const cell = (e, s, prev) => {
@@ -292,15 +322,17 @@ async function renderCharacterSheet(id) {
 
   main.innerHTML = `
     <div class="page-head">
-      <div><h1>${esc(ch.name)}${ch.epithet ? ` <span class="sub">${esc(ch.epithet)}</span>` : ""}</h1>
+      <div><h1>${esc(fullName(ch))}${ch.title ? ` <span class="sub">${esc(ch.title)}</span>` : ""}</h1>
+      ${ch.nickname ? `<div class="sub">“${esc(ch.nickname)}”</div>` : ""}
       <div class="sub">${[ch.race, ch.class, ch.subclass].filter(Boolean).map(esc).join(" · ") || "No class set"}
         <span class="badge ${ch.status === "alive" ? "on" : ch.status === "dead" ? "dead" : ""}">${esc(ch.status)}</span>
-        ${ch.role ? `<span class="badge">${esc(ch.role)}</span>` : ""}</div></div>
+        ${ch.role ? `<span class="badge">${esc(ch.role)}</span>` : ""}</div>
+      ${affilNow ? `<div class="sub">${affilText(affilNow, true)}${point !== undefined ? ` <span class="null">at ${esc(state.labels.story_points.get(point))}</span>` : ""}</div>` : ""}</div>
       <span class="spacer"></span>
       <a class="btn" href="#/t/characters">← Roster</a>
       <button class="btn" id="edit-char">Edit</button>
     </div>
-    <div class="detail">${fact("Faction", ch.faction)}${fact("Alignment", ch.alignment)}${fact("Age", ch.age)}</div>
+    <div class="detail">${fact("Class", [ch.class, ch.subclass].filter(Boolean).join(" / "))}${fact("Rank", affilNow?.rank)}${affilNow ? `<div><div class="k">Faction</div>${affilNow.faction_id ? `<a href="#/faction/${affilNow.faction_id}">${esc(affilNow.faction)}</a>` : "unaffiliated"}</div>` : ""}${affilNow?.secret_faction_id ? `<div><div class="k">Secret loyalty</div><a href="#/faction/${affilNow.secret_faction_id}">${esc(affilNow.secret_faction)}</a></div>` : ""}${fact("Alignment", ch.alignment)}${fact("Age", ch.age)}</div>
     ${ch.bio ? `<h3>Bio</h3><div class="prose">${esc(ch.bio)}</div>` : ""}
 
     <h3>Effective stats at
@@ -333,6 +365,15 @@ async function renderCharacterSheet(id) {
         return `<tr class="clickable ${e.story_point_id === point ? "selected" : ""}" data-stats="${e.stats_id}"><td>${esc(e.story_point)}${e.is_snapshot ? "" : ' <span class="badge" title="No stat version here; carried forward">carried</span>'}</td>${[...BASE_STATS, ...usedGear].map((s) => cell(e, s, effective[i - 1])).join("")}<td class="trunc">${e.is_snapshot ? esc(sv.change_reason ?? "") : ""}</td></tr>`;
       }), "No stat versions yet.", [...BASE_STATS, ...usedGear].map(() => "num"))}
 
+    <h3>Rank &amp; faction history</h3>
+    <div class="toolbar"><button class="btn primary" id="add-affil">+ Rank / faction version</button>
+      <span class="sub">Each version carries forward until the next. Add one where a promotion, defection or betrayal happens. Click a row to edit.</span></div>
+    ${tableHtml(["Story point", "Rank", "Faction", "Secret loyalty", "Reason"], affils.map((a, i) => {
+      const prev = affils[i - 1];
+      const changed = (k) => prev && prev[k] !== a[k] ? ' class="changed"' : "";
+      return `<tr class="clickable ${affilNow?.id === a.id ? "selected" : ""}" data-affil="${a.id}"><td>${esc(a.story_point)}</td><td${changed("rank")}>${esc(a.rank ?? "")}</td><td${changed("faction_id")}>${a.faction_id ? esc(a.faction) : '<span class="null">unaffiliated</span>'}</td><td${changed("secret_faction_id")}>${a.secret_faction_id ? `<span class="badge secret">${esc(a.secret_faction)}</span>` : ""}</td><td class="trunc">${esc(a.change_reason ?? "")}</td></tr>`;
+    }), "No rank or faction recorded yet.")}
+
     <h3>Equipment history</h3>
     <div class="toolbar"><button class="btn primary" id="add-gear">+ Give item</button></div>
     ${tableHtml(["Item", "From", "Until", "State", "Qty", "Notes"], equipment.map((e) =>
@@ -359,7 +400,7 @@ async function renderCharacterSheet(id) {
   $("#add-loadout").onclick = () => openForm("loadouts", null, { character_id: id }, (saved) => saved && (location.hash = `#/loadout/${saved.id}`));
   $("#save-loadout").onclick = async () => {
     const label = state.labels.story_points.get(point);
-    const name = prompt("Name for the new loadout:", `${ch.name} @ ${label}`);
+    const name = prompt("Name for the new loadout:", `${fullName(ch)} @ ${label}`);
     if (!name) return;
     const lo = await api("POST", "loadouts", { name, character_id: id, description: `Snapshot of story gear at ${label}` });
     for (const e of equipment.filter(activeAt)) {
@@ -387,6 +428,21 @@ async function renderCharacterSheet(id) {
     if (last) for (const s of BASE_STATS) preset[s] = last[s];
     openForm("character_stats", null, preset, reload);
   };
+  $("#add-affil").onclick = () => {
+    const last = affils[affils.length - 1];
+    const taken = new Set(affils.map((a) => a.story_point_id));
+    const free = (sp) => !taken.has(sp.id);
+    const nextPoint = (point !== undefined && free({ id: point }) ? state.lookups.story_points.find((sp) => sp.id === point) : null)
+      ?? state.lookups.story_points.find((sp) => free(sp) && (!last || sp.sequence > last.sequence));
+    const preset = { character_id: id, story_point_id: nextPoint?.id ?? "" };
+    if (last) Object.assign(preset, { faction_id: last.faction_id, rank: last.rank, secret_faction_id: last.secret_faction_id });
+    openForm("character_affiliations", null, preset, reload);
+  };
+  main.querySelectorAll("[data-affil]").forEach((tr) => tr.onclick = () => {
+    const a = affilById.get(+tr.dataset.affil);
+    const row = {}; for (const c of state.meta.character_affiliations.columns) row[c.name] = a[c.name];
+    openForm("character_affiliations", row, null, reload);
+  });
   $("#add-gear").onclick = () => openForm("character_equipment", null, { character_id: id, from_story_point_id: point ?? "" }, reload);
   main.querySelectorAll("[data-stats]").forEach((tr) => tr.onclick = () => openForm("character_stats", statById.get(+tr.dataset.stats), null, reload));
   main.querySelectorAll("[data-eq]").forEach((tr) => tr.onclick = () => {
@@ -426,10 +482,10 @@ async function renderItemSheet(id) {
     }), "No modifiers.", ["num"])}
     <h3>Held by</h3>
     ${tableHtml(["Character", "From", "Until", "State"], holders.map((h) =>
-      `<tr><td><a href="#/character/${h.character_id}">${esc(h.character_name)}</a></td><td>${esc(h.from_label)}</td><td>${h.until_label ? esc(h.until_label) : '<span class="null">still held</span>'}</td><td>${h.equipped ? "equipped" : "carried"}</td></tr>`), "Nobody holds this item.")}
+      `<tr><td><a href="#/character/${h.character_id}">${esc(charName(h.character_id, h.character_name))}</a></td><td>${esc(h.from_label)}</td><td>${h.until_label ? esc(h.until_label) : '<span class="null">still held</span>'}</td><td>${h.equipped ? "equipped" : "carried"}</td></tr>`), "Nobody holds this item.")}
     <h3>In loadouts</h3>
     ${tableHtml(["Loadout", "Owner"], loadouts.map((l) =>
-      `<tr><td><a href="#/loadout/${l.id}">${esc(l.name)}</a></td><td>${l.character_id ? esc(l.character_name) : '<span class="badge">generic</span>'}</td></tr>`), "Not part of any loadout.")}
+      `<tr><td><a href="#/loadout/${l.id}">${esc(l.name)}</a></td><td>${l.character_id ? esc(charName(l.character_id, l.character_name)) : '<span class="badge">generic</span>'}</td></tr>`), "Not part of any loadout.")}
     ${item.lore ? `<h3>Lore</h3><div class="prose">${esc(item.lore)}</div>` : ""}`;
   $("#edit-item").onclick = () => openForm("items", item, null, (saved) => saved ? reload() : (location.hash = "#/t/items"));
   $("#add-mod").onclick = () => openForm("item_modifiers", null, { item_id: id }, reload);
@@ -502,12 +558,50 @@ async function renderEffectSheet(id) {
       "No modifiers yet.", ["num"])}
     <h3>On the timeline</h3>
     ${tableHtml(["Character", "From", "Until", "Cause"], characters.map((c) =>
-      `<tr><td><a href="#/character/${c.character_id}">${esc(c.character_name)}</a></td><td>${esc(c.from_label)}</td><td>${c.until_label ? esc(c.until_label) : '<span class="null">ongoing</span>'}</td><td class="trunc">${esc(c.cause ?? "")}</td></tr>`),
+      `<tr><td><a href="#/character/${c.character_id}">${esc(charName(c.character_id, c.character_name))}</a></td><td>${esc(c.from_label)}</td><td>${c.until_label ? esc(c.until_label) : '<span class="null">ongoing</span>'}</td><td class="trunc">${esc(c.cause ?? "")}</td></tr>`),
       "No character has this effect in the story. Apply it from a character's sheet.")}
     ${ef.notes ? `<h3>Notes</h3><div class="prose">${esc(ef.notes)}</div>` : ""}`;
   $("#edit-ef").onclick = () => openForm("effects", ef, null, (saved) => saved ? reload() : (location.hash = "#/t/effects"));
   $("#add-em").onclick = () => openForm("effect_modifiers", null, { effect_id: id }, reload);
   main.querySelectorAll("[data-em]").forEach((tr) => tr.onclick = () => openForm("effect_modifiers", modifiers.find((m) => m.id === +tr.dataset.em), null, reload));
+}
+
+// ------------------------------------------------------------------ faction sheet
+const EVENT_LABEL = { joined: "joined", rank: "rank change", "turned traitor": "turned traitor", "loyal again": "loyal again",
+  "secretly joined": "secret member", "went undercover": "went undercover", revealed: "revealed", left: "left" };
+async function renderFactionSheet(id) {
+  const { faction: f, history, members } = await api("GET", `factions/${id}/sheet`);
+  const reload = () => renderFactionSheet(id);
+  const points = [...new Map(members.map((m) => [m.story_point_id, m.story_point])).entries()];
+  const sel = state.factionPoint?.[id];
+  const point = points.some(([pid]) => pid === sel) ? sel : points[points.length - 1]?.[0];
+  const atPoint = members.filter((m) => m.story_point_id === point);
+  const bad = new Set(["turned traitor", "left"]);
+  main.innerHTML = `
+    <div class="page-head">
+      <div><h1>${esc(f.name)}</h1><div class="sub">${esc(f.kind ?? "faction")}</div></div>
+      <span class="spacer"></span>
+      <a class="btn" href="#/t/factions">← Factions</a>
+      <button class="btn" id="edit-fa">Edit</button>
+    </div>
+    ${f.description ? `<div class="prose">${esc(f.description)}</div>` : ""}
+    <h3>Members at
+      ${points.length ? `<select id="fa-point">${points.map(([pid, label]) => `<option value="${pid}" ${pid === point ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>` : ""}
+    </h3>
+    ${tableHtml(["Character", "Rank", "Membership"], atPoint.map((m) => {
+      const open = m.faction_id === id;
+      return `<tr><td><a href="#/character/${m.character_id}">${esc(charName(m.character_id, m.character_name))}</a></td><td>${esc(open ? m.rank ?? "" : "")}</td><td>${open
+        ? (m.secret_faction_id ? `<span class="badge dead" title="Publicly a member, secretly loyal elsewhere">traitor: secretly ${esc(m.secret_faction)}</span>` : '<span class="badge on">member</span>')
+        : `<span class="badge secret" title="Publicly ${esc(m.faction ?? "unaffiliated")}">secret member</span> <span class="null">publicly ${esc(m.faction ?? "unaffiliated")}${m.rank ? `, ${esc(m.rank)}` : ""}</span>`}</td></tr>`;
+    }), "No members at this point.")}
+    <h3>Timeline</h3>
+    <div class="toolbar"><span class="sub">Joins, promotions, betrayals and departures, from each character's rank &amp; faction versions.</span></div>
+    ${tableHtml(["Story point", "Character", "Event", "Now", "Reason"], history.map((h) =>
+      `<tr><td>${esc(h.story_point)}</td><td><a href="#/character/${h.character_id}">${esc(charName(h.character_id, h.character_name))}</a></td><td><span class="badge ${bad.has(h.event) ? "dead" : h.event.includes("secret") || h.event === "went undercover" ? "secret" : "on"}">${esc(EVENT_LABEL[h.event] ?? h.event)}</span></td><td>${affilText(h, true)}</td><td class="trunc">${esc(h.change_reason ?? "")}</td></tr>`),
+      "Nobody has been in this faction yet. Add a rank / faction version on a character's sheet.")}
+    ${f.notes ? `<h3>Notes</h3><div class="prose">${esc(f.notes)}</div>` : ""}`;
+  $("#edit-fa").onclick = () => openForm("factions", f, null, (saved) => saved ? reload() : (location.hash = "#/t/factions"));
+  $("#fa-point")?.addEventListener("change", (e) => { (state.factionPoint ||= {})[id] = +e.target.value; reload(); });
 }
 
 // ------------------------------------------------------------------ loadout lab
@@ -566,7 +660,7 @@ async function renderLab() {
     <div class="lab-controls">
       <div class="lab-row">
         <label class="lab-field">Character
-          <select id="lab-char">${chars.map((c) => `<option value="${c.id}" ${c.id === cid ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+          <select id="lab-char">${chars.map((c) => `<option value="${c.id}" ${c.id === cid ? "selected" : ""}>${esc(fullName(c))}</option>`).join("")}</select></label>
         <label class="lab-field">Base stats at
           <select id="lab-point" ${points.length ? "" : "disabled"}><option value="">Latest${points.length ? ` (${esc(points[points.length - 1].story_point)})` : ""}</option>
           ${points.map((p) => `<option value="${p.story_point_id}" ${String(lab.story_point_id) === String(p.story_point_id) ? "selected" : ""}>${esc(p.story_point)}</option>`).join("")}</select></label>
@@ -630,7 +724,7 @@ function labResult(sim) {
       ${c.situational.length ? `<div class="situational"><span class="sub">Situational:</span> ${c.situational.map((m) => `${esc(m.source)}: ${modText(m)} <i>${esc(m.condition)}</i>`).join("; ")}</div>` : ""}
     </div>`).join("");
   return `
-    <h3>${esc(sim.character.name)} @ ${esc(sim.story_point.label)}${baseNote}</h3>
+    <h3>${esc(fullName(sim.character))} @ ${esc(sim.story_point.label)}${baseNote}</h3>
     ${effLine}
     <div class="table-wrap"><table class="lab-table">
       <thead><tr><th>Stat</th><th class="num" title="Base stats with no gear and no effects">Innate</th>${head}</tr></thead>
@@ -649,7 +743,7 @@ async function renderEffective() {
     <div class="toolbar"><select id="eff-point"><option value="">All story points</option>${state.lookups.story_points.map((s) =>
       `<option value="${s.id}" ${String(pointSel) === String(s.id) ? "selected" : ""}>${esc(s.label)}</option>`).join("")}</select></div>
     ${tableHtml(["Character", "Story point", ...[...BASE_STATS, ...GEAR_STATS].map((s) => STAT_LABEL[s])],
-      shown.map((r) => `<tr><td><a href="#/character/${r.character_id}">${esc(r.character_name)}</a></td><td>${esc(r.story_point)}${r.is_snapshot ? "" : ' <span class="badge">carried</span>'}</td>${[...BASE_STATS, ...GEAR_STATS].map((s) => `<td class="num">${r[s]}</td>`).join("")}</tr>`),
+      shown.map((r) => `<tr><td><a href="#/character/${r.character_id}">${esc(charName(r.character_id, r.character_name))}</a></td><td>${esc(r.story_point)}${r.is_snapshot ? "" : ' <span class="badge">carried</span>'}</td>${[...BASE_STATS, ...GEAR_STATS].map((s) => `<td class="num">${r[s]}</td>`).join("")}</tr>`),
       "No stat versions recorded yet.", ["", ...[...BASE_STATS, ...GEAR_STATS].map(() => "num")])}`;
   $("#eff-point").onchange = (e) => { state.effPoint = e.target.value; renderEffective(); };
 }
