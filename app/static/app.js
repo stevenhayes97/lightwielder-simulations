@@ -51,12 +51,12 @@ async function loadLookups() {
   state.seq = new Map(state.lookups.story_points.map((s) => [s.id, s.sequence]));
 }
 
-// "Alexander IV the Great" (title only when asked: it's long for dropdowns)
+// "Alexander IV" (titles are versioned in character_titles, so they're not part of the name)
 const charName = (id, fallback) => state.labels.characters?.get(id) ?? fallback;
-const fullName = (c, withTitle) => [c.name, c.suffix, withTitle && c.title].filter(Boolean).join(" ");
+const fullName = (c) => [c.name, c.suffix].filter(Boolean).join(" ");
 // Fields shown first in forms, in this order (older DBs append new columns at the end)
 const PLACEHOLDER = { suffix: "e.g. IV, Jr.", title: "e.g. the Great", nickname: "e.g. Sandy", rank: "e.g. Knight-Captain" };
-const FIELD_ORDER = { characters: ["name", "suffix", "title", "nickname"] };
+const FIELD_ORDER = { characters: ["name", "suffix", "nickname"] };
 function orderedColumns(table) {
   const first = FIELD_ORDER[table] || [];
   const cols = state.meta[table].columns;
@@ -105,6 +105,7 @@ function rowLabel(table, row) {
   const col = state.meta[table].label;
   if (col && row[col]) return row[col];
   if (table === "character_affiliations") return `${state.labels.characters.get(row.character_id)} @ ${state.labels.story_points.get(row.story_point_id)}: ${affilText(row)}`;
+  if (table === "character_titles") return `${state.labels.characters.get(row.character_id)} @ ${state.labels.story_points.get(row.story_point_id)}: ${row.title ?? "no title"}`;
   if (table === "character_stats") return `${state.labels.characters.get(row.character_id)} @ ${state.labels.story_points.get(row.story_point_id)}`;
   if (table === "character_equipment") return `${state.labels.items.get(row.item_id)} → ${state.labels.characters.get(row.character_id)}`;
   if (table === "item_modifiers") return `${state.labels.items.get(row.item_id)}: ${modText(row)}`;
@@ -116,7 +117,7 @@ function rowLabel(table, row) {
 
 // ------------------------------------------------------------------ nav / routing
 const NAV_GROUPS = [
-  ["Roster", ["characters", "character_stats", "character_affiliations", "factions", "story_points"]],
+  ["Roster", ["characters", "character_stats", "character_affiliations", "character_titles", "factions", "story_points"]],
   ["Gear", ["items", "item_modifiers", "character_equipment"]],
   ["Effects", ["effects", "effect_modifiers", "character_effects"]],
   ["Loadouts", ["loadouts", "loadout_items"]],
@@ -292,7 +293,7 @@ document.querySelectorAll("[data-close]").forEach((b) => b.onclick = () => $("#d
 // ------------------------------------------------------------------ character sheet
 async function renderCharacterSheet(id) {
   const sheet = await api("GET", `characters/${id}/sheet`);
-  const { character: ch, stats, equipment, effects: charEffects, affiliations: affils, effective } = sheet;
+  const { character: ch, stats, equipment, effects: charEffects, affiliations: affils, titles, effective } = sheet;
   const statById = new Map(stats.map((s) => [s.id, s]));
   const reload = () => renderCharacterSheet(id);
   const sel = state.sheetPoint?.[id];
@@ -310,6 +311,9 @@ async function renderCharacterSheet(id) {
   // rank & faction version in effect at the selected point (latest one if no stat point is selected)
   const affilNow = pointSeq === undefined ? affils[affils.length - 1] : [...affils].reverse().find((a) => a.sequence <= pointSeq);
   const affilById = new Map(affils.map((a) => [a.id, a]));
+  // title version in effect at the selected point, same rule as rank & faction
+  const titleNow = pointSeq === undefined ? titles[titles.length - 1] : [...titles].reverse().find((t) => t.sequence <= pointSeq);
+  const titleById = new Map(titles.map((t) => [t.id, t]));
 
   const fact = (k, v) => v ? `<div><div class="k">${k}</div>${esc(v)}</div>` : "";
   const cell = (e, s, prev) => {
@@ -322,7 +326,7 @@ async function renderCharacterSheet(id) {
 
   main.innerHTML = `
     <div class="page-head">
-      <div><h1>${esc(fullName(ch))}${ch.title ? ` <span class="sub">${esc(ch.title)}</span>` : ""}</h1>
+      <div><h1>${esc(fullName(ch))}${titleNow?.title ? ` <span class="sub">${esc(titleNow.title)}</span>` : ""}</h1>
       ${ch.nickname ? `<div class="sub">“${esc(ch.nickname)}”</div>` : ""}
       <div class="sub">${[ch.race, ch.class, ch.subclass].filter(Boolean).map(esc).join(" · ") || "No class set"}
         <span class="badge ${ch.status === "alive" ? "on" : ch.status === "dead" ? "dead" : ""}">${esc(ch.status)}</span>
@@ -373,6 +377,13 @@ async function renderCharacterSheet(id) {
       const changed = (k) => prev && prev[k] !== a[k] ? ' class="changed"' : "";
       return `<tr class="clickable ${affilNow?.id === a.id ? "selected" : ""}" data-affil="${a.id}"><td>${esc(a.story_point)}</td><td${changed("rank")}>${esc(a.rank ?? "")}</td><td${changed("faction_id")}>${a.faction_id ? esc(a.faction) : '<span class="null">unaffiliated</span>'}</td><td${changed("secret_faction_id")}>${a.secret_faction_id ? `<span class="badge secret">${esc(a.secret_faction)}</span>` : ""}</td><td class="trunc">${esc(a.change_reason ?? "")}</td></tr>`;
     }), "No rank or faction recorded yet.")}
+
+    <h3>Title history</h3>
+    <div class="toolbar"><button class="btn primary" id="add-title">+ Title version</button>
+      <span class="sub">A title carries forward until the next version. Leave the title blank to record that it was lost. Click a row to edit.</span></div>
+    ${tableHtml(["Story point", "Title", "Reason"], titles.map((t) =>
+      `<tr class="clickable ${titleNow?.id === t.id ? "selected" : ""}" data-title="${t.id}"><td>${esc(t.story_point)}</td><td>${t.title ? esc(t.title) : '<span class="null">no title</span>'}</td><td class="trunc">${esc(t.change_reason ?? "")}</td></tr>`),
+      "No title yet.")}
 
     <h3>Equipment history</h3>
     <div class="toolbar"><button class="btn primary" id="add-gear">+ Give item</button></div>
@@ -442,6 +453,19 @@ async function renderCharacterSheet(id) {
     const a = affilById.get(+tr.dataset.affil);
     const row = {}; for (const c of state.meta.character_affiliations.columns) row[c.name] = a[c.name];
     openForm("character_affiliations", row, null, reload);
+  });
+  $("#add-title").onclick = () => {
+    const last = titles[titles.length - 1];
+    const taken = new Set(titles.map((t) => t.story_point_id));
+    const free = (sp) => !taken.has(sp.id);
+    const nextPoint = (point !== undefined && free({ id: point }) ? state.lookups.story_points.find((sp) => sp.id === point) : null)
+      ?? state.lookups.story_points.find((sp) => free(sp) && (!last || sp.sequence > last.sequence));
+    openForm("character_titles", null, { character_id: id, story_point_id: nextPoint?.id ?? "" }, reload);
+  };
+  main.querySelectorAll("[data-title]").forEach((tr) => tr.onclick = () => {
+    const t = titleById.get(+tr.dataset.title);
+    const row = {}; for (const c of state.meta.character_titles.columns) row[c.name] = t[c.name];
+    openForm("character_titles", row, null, reload);
   });
   $("#add-gear").onclick = () => openForm("character_equipment", null, { character_id: id, from_story_point_id: point ?? "" }, reload);
   main.querySelectorAll("[data-stats]").forEach((tr) => tr.onclick = () => openForm("character_stats", statById.get(+tr.dataset.stats), null, reload));

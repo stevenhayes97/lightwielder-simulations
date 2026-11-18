@@ -31,9 +31,10 @@ story_points ──┬──< character_stats >── characters ──< charact
 | Table | What it holds |
 |---|---|
 | `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`. |
-| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `title` (*the Great*), `nickname`, **class**, subclass, race, alignment, role, status, age, bio, notes. |
+| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, alignment, role, status, age, bio, notes. |
 | `factions` | Kingdoms, orders, guilds, cults…: name, kind, description. |
 | `character_affiliations` | **Versioned rank & faction**: one row per character per story point, like stat versions. `faction` (blank = unaffiliated), `rank`, optional `secret_faction` (true loyalty of a spy or a traitor not yet revealed), `change_reason`. |
+| `character_titles` | **Versioned title / epithet** (*the Great*, *Greycloak*): one row per character per story point, carried forward until the next. No row yet = no title; a blank `title` = lost or stripped from that point. `change_reason`. |
 | `character_stats` | **Versioned base stats**: one row per character per story point. `hp`, `strength`, `intelligence`, `stamina`, plus `change_reason`. |
 | `items` | Gear catalogue: category, slot, rarity, damage + type, armor rating, weight, value, strength requirement, description, lore. |
 | `item_modifiers` | Buffs/debuffs per item: target stat, `flat` or `percent`, amount (negative = debuff), optional `condition`. |
@@ -55,7 +56,11 @@ SELECT character_name, rank, faction, secret_faction
 FROM v_character_affiliations WHERE story_point = 'Chapter 5';
 ```
 
-Older DBs are upgraded automatically on start: `epithet` is renamed `title`, `suffix` and `nickname` are added, and a free-text `characters.faction` is migrated: each value becomes a faction and a
+A **title** works the same way, in `character_titles`: a character can start the story without one, earn one in Ch. 5 and lose it in Ch. 12
+(a version with a blank title). `v_character_titles` gives the title in effect at every story point.
+
+Older DBs are upgraded automatically on start: `suffix` and `nickname` are added; a fixed `characters.title` (or older `epithet`) becomes a first
+`character_titles` version at the character's first stat version, and the column is dropped; and a free-text `characters.faction` is migrated: each value becomes a faction and a
 first affiliation version at the character's first stat version, and the old column is dropped.
 
 ### Effective stats (`v_effective_stats` view)
@@ -79,6 +84,7 @@ FROM v_effective_stats WHERE story_point = 'Chapter 5';
 - **Table views** for every table: search, filters on related records, sortable columns, click a row to edit, **+ New** to create. Forms are built from the live schema, with dropdowns for related records and fixed choice lists.
 - **Character sheet** (Characters → *Sheet →*): stat cards at any story point with a base / gear / effects breakdown, gear and effects active at that point,
   **+ Apply effect** to put a buff or debuff on the timeline, effect history, a progression table with ▲▼ changes, equipment history, and quick **+ Stat version** (copies the latest numbers) and **+ Give item**.
+- The character sheet shows the **title** in effect at the selected story point and a **title history** (**+ Title version**).
 - The character sheet also shows **rank & faction** at the selected story point (including a secret loyalty) and a
   **rank & faction history**. **+ Rank / faction version** copies the latest values so you only change what moved.
 - **Faction sheet** (Factions → *Sheet →*): members at any story point (open members, secret members, and traitors inside the faction)
@@ -119,6 +125,7 @@ JSON over HTTP, for scripts and future simulation code:
 | `GET /api/items/<id>/sheet` | Item + modifiers + holders |
 | `GET /api/effective_stats?character_id=` | The effective stats view |
 | `GET /api/affiliations?character_id=&story_point_id=&faction_id=` | Rank & faction per story point (`faction_id` matches public or secret members) |
+| `GET /api/titles?character_id=&story_point_id=` | Title per story point |
 | `GET /api/factions/<id>/sheet` | Faction + members per point + timeline of events |
 | `GET /api/loadouts/<id>/sheet`, `GET /api/effects/<id>/sheet` | Loadout + items; effect + modifiers |
 | `GET /api/simulate?character_id=&story_point_id=&loadouts=1,2&effects=3,4&current=1&bare=1&story_effects=1` | Loadout Lab comparison (omit `story_point_id` for latest) |

@@ -31,6 +31,7 @@ TABLES = {
     "characters": {"title": "Characters", "label": "name"},
     "character_stats": {"title": "Stat Versions", "label": None},
     "character_affiliations": {"title": "Rank & Faction Versions", "label": None},
+    "character_titles": {"title": "Title Versions", "label": None},
     "factions": {"title": "Factions", "label": "name"},
     "story_points": {"title": "Story Points", "label": "label"},
     "items": {"title": "Items", "label": "name"},
@@ -73,6 +74,7 @@ def init_db(db_path, seed=False):
         with open(SCHEMA, encoding="utf-8") as f:
             conn.executescript(f.read())
         migrate_character_columns(conn)
+        migrate_character_title(conn)
         migrate_character_faction(conn)
         if seed:
             empty = conn.execute("SELECT COUNT(*) FROM characters").fetchone()[0] == 0
@@ -88,20 +90,52 @@ def init_db(db_path, seed=False):
 
 
 # Columns added to characters after the first release: (name, type), in display order.
-CHARACTER_ADDED_COLUMNS = [("suffix", "TEXT"), ("title", "TEXT"), ("nickname", "TEXT")]
+CHARACTER_ADDED_COLUMNS = [("suffix", "TEXT"), ("nickname", "TEXT")]
 
 
 def migrate_character_columns(conn):
-    """Bring older characters tables up to date: `epithet` was renamed `title`,
-    and suffix / nickname were added. New columns go at the end of the table on
-    old DBs; the UI orders the form fields itself."""
+    """Bring older characters tables up to date: suffix / nickname were added.
+    New columns go at the end of the table on old DBs; the UI orders the form
+    fields itself."""
     cols = columns_of(conn, "characters")
-    if "epithet" in cols and "title" not in cols:
-        conn.execute("ALTER TABLE characters RENAME COLUMN epithet TO title")
-        cols = columns_of(conn, "characters")
     for name, typ in CHARACTER_ADDED_COLUMNS:
         if name not in cols:
             conn.execute(f"ALTER TABLE characters ADD COLUMN {name} {typ}")
+
+
+def first_point_for(conn, char_id):
+    """The character's first stat version's story point, else the earliest story point."""
+    row = conn.execute(
+        """SELECT cs.story_point_id FROM character_stats cs JOIN story_points sp ON sp.id = cs.story_point_id
+           WHERE cs.character_id = ? ORDER BY sp.sequence LIMIT 1""", (char_id,)).fetchone() \
+        or conn.execute("SELECT id FROM story_points ORDER BY sequence LIMIT 1").fetchone()
+    return row[0] if row else None
+
+
+def migrate_character_title(conn):
+    """Older DBs kept a fixed `title` (earlier `epithet`) on characters. Titles
+    change with the story, so move each value into a first `character_titles`
+    version (at the character's first stat version, else the earliest story
+    point), then drop the column."""
+    cols = columns_of(conn, "characters")
+    for col in ("title", "epithet"):
+        if col not in cols:
+            continue
+        pending = conn.execute(f"SELECT id, {col} AS t FROM characters WHERE IFNULL(TRIM({col}), '') <> ''").fetchall()
+        for ch in pending:
+            sp = first_point_for(conn, ch["id"])
+            if sp is None:
+                print(f"Not migrating characters.{col}: add a story point first")
+                return
+            if not conn.execute("SELECT 1 FROM character_titles WHERE character_id = ?", (ch["id"],)).fetchone():
+                conn.execute("""INSERT INTO character_titles (character_id, story_point_id, title, change_reason)
+                                VALUES (?, ?, ?, 'Migrated from character title')""", (ch["id"], sp, ch["t"].strip()))
+        if sqlite3.sqlite_version_info >= (3, 35, 0):
+            conn.execute(f"ALTER TABLE characters DROP COLUMN {col}")
+            print(f"Moved characters.{col} into character_titles ({len(pending)} characters)")
+        else:
+            conn.execute(f"UPDATE characters SET {col} = NULL")
+            print(f"Moved characters.{col} into character_titles (SQLite < 3.35 can't drop the old column)")
 
 
 def migrate_character_faction(conn):
@@ -110,12 +144,9 @@ def migrate_character_faction(conn):
     first stat version, else the earliest story point), then drop the column."""
     if "faction" not in columns_of(conn, "characters"):
         return
-    first_point = conn.execute("SELECT id FROM story_points ORDER BY sequence LIMIT 1").fetchone()
     pending = conn.execute("SELECT id, faction FROM characters WHERE IFNULL(TRIM(faction), '') <> ''").fetchall()
     for ch in pending:
-        sp = conn.execute(
-            """SELECT cs.story_point_id FROM character_stats cs JOIN story_points sp ON sp.id = cs.story_point_id
-               WHERE cs.character_id = ? ORDER BY sp.sequence LIMIT 1""", (ch["id"],)).fetchone() or first_point
+        sp = first_point_for(conn, ch["id"])
         if sp is None:
             print("Not migrating characters.faction: add a story point first")
             return
@@ -124,7 +155,7 @@ def migrate_character_faction(conn):
         fid = conn.execute("SELECT id FROM factions WHERE name = ?", (name,)).fetchone()[0]
         if not conn.execute("SELECT 1 FROM character_affiliations WHERE character_id = ?", (ch["id"],)).fetchone():
             conn.execute("""INSERT INTO character_affiliations (character_id, story_point_id, faction_id, change_reason)
-                            VALUES (?, ?, ?, 'Migrated from character faction')""", (ch["id"], sp[0], fid))
+                            VALUES (?, ?, ?, 'Migrated from character faction')""", (ch["id"], sp, fid))
     if sqlite3.sqlite_version_info >= (3, 35, 0):
         conn.execute("ALTER TABLE characters DROP COLUMN faction")
         print(f"Moved characters.faction into factions / character_affiliations ({len(pending)} characters)")
@@ -284,6 +315,19 @@ def affiliations(conn, params):
     return [dict(r) for r in conn.execute(sql + " ORDER BY sequence, character_name", args)]
 
 
+def titles(conn, params):
+    """Title per character per story point (v_character_titles)."""
+    where, args = [], []
+    for k in ("character_id", "story_point_id"):
+        if params.get(k):
+            where.append(f"{k} = ?")
+            args.append(params[k])
+    sql = "SELECT * FROM v_character_titles"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return [dict(r) for r in conn.execute(sql + " ORDER BY sequence, character_name", args)]
+
+
 def faction_sheet(conn, faction_id):
     """Faction + every version that joins, changes rank in, or leaves it.
     `event`: joined, rank, turned traitor, loyal again, secretly joined, went undercover, revealed, left."""
@@ -349,8 +393,12 @@ def character_sheet(conn, char_id):
            LEFT JOIN story_points u ON u.id = ce.until_story_point_id
            WHERE ce.character_id = ? ORDER BY f.sequence, e.name""", (char_id,))]
     affil = [dict(r) for r in conn.execute(AFFIL_SQL + " WHERE ca.character_id = ? ORDER BY sp.sequence", (char_id,))]
+    title_rows = [dict(r) for r in conn.execute(
+        """SELECT ct.*, sp.label AS story_point, sp.sequence
+           FROM character_titles ct JOIN story_points sp ON sp.id = ct.story_point_id
+           WHERE ct.character_id = ? ORDER BY sp.sequence""", (char_id,))]
     return {"character": character, "stats": stats, "equipment": equipment, "effects": effects,
-            "affiliations": affil, "effective": effective_stats(conn, {"character_id": char_id})}
+            "affiliations": affil, "titles": title_rows, "effective": effective_stats(conn, {"character_id": char_id})}
 
 
 def active_effect_rows(conn, char_id, sequence):
@@ -620,6 +668,8 @@ class Handler(BaseHTTPRequestHandler):
             return effective_stats(conn, params), ok
         if parts == ["affiliations"] and method == "GET":
             return affiliations(conn, params), ok
+        if parts == ["titles"] and method == "GET":
+            return titles(conn, params), ok
         if parts == ["simulate"] and method == "GET":
             return simulate(conn, params), ok
         if len(parts) == 3 and parts[2] == "sheet" and method == "GET":

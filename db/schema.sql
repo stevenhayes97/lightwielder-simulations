@@ -19,14 +19,14 @@ CREATE TABLE IF NOT EXISTS story_points (
 
 -- ---------------------------------------------------------------------------
 -- Character roster: identity info that rarely changes.
--- Class / subclass are fixed identity ("swordsman"). Rank and faction change
--- with the story, so they live in character_affiliations (versioned) instead.
+-- Class / subclass are fixed identity ("swordsman"). Rank, faction and title
+-- change with the story, so they live in character_affiliations and
+-- character_titles (versioned) instead.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS characters (
     id          INTEGER PRIMARY KEY,
     name        TEXT NOT NULL,
     suffix      TEXT,                             -- regnal number / generational: "IV", "Jr."
-    title       TEXT,                             -- epithet: "the Great", "Greycloak"
     nickname    TEXT,                             -- what friends call them: "Sandy"
     class       TEXT,
     subclass    TEXT,
@@ -95,6 +95,22 @@ CREATE TABLE IF NOT EXISTS character_affiliations (
     notes              TEXT,
     UNIQUE (character_id, story_point_id),
     CHECK (secret_faction_id IS NULL OR faction_id IS NULL OR secret_faction_id <> faction_id)
+);
+
+-- ---------------------------------------------------------------------------
+-- Versioned title / epithet ("the Great", "Greycloak"): one row per character
+-- per story point, carried forward until the next version. A character with no
+-- row yet has no title; a version with a blank title means the title was lost
+-- or stripped from that point on.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS character_titles (
+    id              INTEGER PRIMARY KEY,
+    character_id    INTEGER NOT NULL REFERENCES characters(id)   ON DELETE CASCADE,
+    story_point_id  INTEGER NOT NULL REFERENCES story_points(id) ON DELETE RESTRICT,
+    title           TEXT,                         -- NULL = no title from this point on
+    change_reason   TEXT,                         -- "earned at the siege", "stripped by the council"
+    notes           TEXT,
+    UNIQUE (character_id, story_point_id)
 );
 
 -- ---------------------------------------------------------------------------
@@ -214,6 +230,7 @@ CREATE TABLE IF NOT EXISTS character_effects (
 );
 
 CREATE INDEX IF NOT EXISTS idx_char_effects  ON character_effects(character_id);
+CREATE INDEX IF NOT EXISTS idx_titles_char   ON character_titles(character_id);
 CREATE INDEX IF NOT EXISTS idx_affil_char    ON character_affiliations(character_id);
 CREATE INDEX IF NOT EXISTS idx_affil_faction ON character_affiliations(faction_id);
 CREATE INDEX IF NOT EXISTS idx_loadouts_char ON loadouts(character_id);
@@ -347,3 +364,30 @@ FROM pts p
 JOIN character_affiliations ca ON ca.id = p.affiliation_id
 LEFT JOIN factions f  ON f.id  = ca.faction_id
 LEFT JOIN factions sf ON sf.id = ca.secret_faction_id;
+
+
+-- ---------------------------------------------------------------------------
+-- Title for every (character, story point) from the character's first title
+-- version onward, carried forward like rank & faction. title NULL = none.
+-- ---------------------------------------------------------------------------
+DROP VIEW IF EXISTS v_character_titles;
+CREATE VIEW v_character_titles AS
+WITH pts AS (
+    SELECT c.id AS character_id, c.name AS character_name, sp.id AS story_point_id, sp.sequence, sp.label,
+           (SELECT ct.id FROM character_titles ct JOIN story_points s2 ON s2.id = ct.story_point_id
+             WHERE ct.character_id = c.id AND s2.sequence <= sp.sequence
+             ORDER BY s2.sequence DESC LIMIT 1) AS title_id
+    FROM characters c CROSS JOIN story_points sp
+)
+SELECT
+    p.character_id,
+    p.character_name,
+    p.story_point_id,
+    p.sequence,
+    p.label                                AS story_point,
+    p.title_id,                                   -- the version in effect
+    (ct.story_point_id = p.story_point_id) AS is_snapshot,
+    ct.title,
+    ct.change_reason
+FROM pts p
+JOIN character_titles ct ON ct.id = p.title_id;
