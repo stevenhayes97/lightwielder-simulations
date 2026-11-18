@@ -32,6 +32,8 @@ TABLES = {
     "character_stats": {"title": "Stat Versions", "label": None},
     "character_affiliations": {"title": "Rank & Faction Versions", "label": None},
     "character_titles": {"title": "Title Versions", "label": None},
+    "skills": {"title": "Skills", "label": "name"},
+    "character_skills": {"title": "Skill Versions", "label": None},
     "factions": {"title": "Factions", "label": "name"},
     "story_points": {"title": "Story Points", "label": "label"},
     "items": {"title": "Items", "label": "name"},
@@ -47,7 +49,7 @@ TABLES = {
 BASE_STATS = ["hp", "strength", "intelligence", "stamina"]
 GEAR_STATS = ["armor", "attack", "damage", "speed", "resistance"]
 TWO_OF_OK = {"ring"}  # slots where two items don't conflict
-DEFAULT_ORDER = {"story_points": "sequence", "factions": "name"}
+DEFAULT_ORDER = {"story_points": "sequence", "factions": "name", "skills": "name"}
 
 
 class ApiError(Exception):
@@ -90,8 +92,12 @@ def init_db(db_path, seed=False):
         conn.close()
 
 
-# Columns added to characters after the first release: (name, type), in display order.
-CHARACTER_ADDED_COLUMNS = [("suffix", "TEXT"), ("nickname", "TEXT")]
+# Columns added after the first release: table -> [(name, type)], in display order.
+ADDED_COLUMNS = {
+    "characters": [("suffix", "TEXT"), ("nickname", "TEXT"), ("height", "TEXT"), ("build", "TEXT"),
+                   ("hair", "TEXT"), ("eyes", "TEXT"), ("personality", "TEXT"), ("goals", "TEXT")],
+    "items": [("layer", "TEXT CHECK (layer IN ('under','main','over'))")],
+}
 
 
 def migrate_before_schema(conn):
@@ -110,13 +116,14 @@ def migrate_before_schema(conn):
 
 
 def migrate_character_columns(conn):
-    """Bring older characters tables up to date: suffix / nickname were added.
+    """Bring older tables up to date with columns added since (see ADDED_COLUMNS).
     New columns go at the end of the table on old DBs; the UI orders the form
     fields itself."""
-    cols = columns_of(conn, "characters")
-    for name, typ in CHARACTER_ADDED_COLUMNS:
-        if name not in cols:
-            conn.execute(f"ALTER TABLE characters ADD COLUMN {name} {typ}")
+    for table, added in ADDED_COLUMNS.items():
+        cols = columns_of(conn, table)
+        for name, typ in added:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
 
 
 def first_point_for(conn, char_id):
@@ -391,7 +398,7 @@ def character_sheet(conn, char_id):
            FROM character_stats cs JOIN story_points sp ON sp.id = cs.story_point_id
            WHERE cs.character_id = ? ORDER BY sp.sequence""", (char_id,))]
     equipment = [dict(r) for r in conn.execute(
-        """SELECT ce.*, i.name AS item_name, i.category, i.slot, i.rarity,
+        """SELECT ce.*, i.name AS item_name, i.category, i.slot, i.layer, i.rarity,
                   f.label AS from_label, f.sequence AS from_sequence,
                   u.label AS until_label, u.sequence AS until_sequence
            FROM character_equipment ce
@@ -415,6 +422,11 @@ def character_sheet(conn, char_id):
            WHERE ct.character_id = ? ORDER BY sp.sequence""", (char_id,))]
     return {"character": character, "stats": stats, "equipment": equipment, "effects": effects,
             "affiliations": affil, "titles": title_rows,
+            "skills": [dict(r) for r in conn.execute(
+                """SELECT cs.*, sk.name AS skill, sk.category, sp.label AS story_point, sp.sequence
+                   FROM character_skills cs JOIN skills sk ON sk.id = cs.skill_id
+                   JOIN story_points sp ON sp.id = cs.story_point_id
+                   WHERE cs.character_id = ? ORDER BY sk.name, sp.sequence""", (char_id,))],
             "ages": [dict(r) for r in conn.execute(
                 "SELECT * FROM v_character_ages WHERE character_id = ? ORDER BY sequence", (char_id,))], "effective": effective_stats(conn, {"character_id": char_id})}
 
@@ -448,7 +460,7 @@ def item_sheet(conn, item_id):
 def loadout_sheet(conn, loadout_id):
     loadout = get_row(conn, "loadouts", loadout_id)
     items = [dict(r) for r in conn.execute(
-        """SELECT li.*, i.name AS item_name, i.category, i.slot, i.rarity, i.armor_rating, i.req_strength
+        """SELECT li.*, i.name AS item_name, i.category, i.slot, i.layer, i.rarity, i.armor_rating, i.req_strength
            FROM loadout_items li JOIN items i ON i.id = li.item_id
            WHERE li.loadout_id = ? ORDER BY li.equipped DESC, i.category, i.name""", (loadout_id,))]
     return {"loadout": loadout, "items": items}
@@ -486,7 +498,7 @@ def _gear_for(conn, rows):
             continue
         mods = [dict(m) for m in conn.execute("SELECT * FROM item_modifiers WHERE item_id = ?", (r["item_id"],))]
         out.append({"item_id": item["id"], "name": item["name"], "category": item["category"],
-                    "slot": item["slot"], "armor_rating": item["armor_rating"] or 0,
+                    "slot": item["slot"], "layer": item["layer"] or "main", "armor_rating": item["armor_rating"] or 0,
                     "req_strength": item["req_strength"], "quantity": r["quantity"] or 1,
                     "equipped": r["equipped"], "modifiers": mods})
     return out
@@ -537,13 +549,16 @@ def _warnings(gear, strength):
         if g["req_strength"] and strength < g["req_strength"]:
             warns.append(f"{g['name']} needs {g['req_strength']} STR (has {strength})")
         if g["slot"] and g["slot"] != "none":
-            slots.setdefault(g["slot"], []).append(g["name"])
-    for slot, names in slots.items():
+            slots.setdefault((g["slot"], g.get("layer") or "main"), []).append(g["name"])
+    for (slot, layer), names in slots.items():
         limit = 2 if slot in TWO_OF_OK else 1
         if len(names) > limit:
-            warns.append(f"Slot '{slot}' holds {len(names)} items: {', '.join(names)}")
-    hands = sum(len(slots.get(s, [])) for s in ("main_hand", "off_hand"))
-    if slots.get("two_hand") and hands:
+            where = slot if layer == "main" else f"{slot} ({layer} layer)"
+            warns.append(f"Slot '{where}' holds {len(names)} items: {', '.join(names)}")
+    def in_slot(s):  # every layer of one slot
+        return [n for (sl, _), names in slots.items() if sl == s for n in names]
+    hands = len(in_slot("main_hand")) + len(in_slot("off_hand"))
+    if in_slot("two_hand") and hands:
         warns.append("Two-handed item equipped alongside a one-handed/off-hand item")
     return warns
 

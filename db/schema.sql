@@ -33,6 +33,12 @@ CREATE TABLE IF NOT EXISTS characters (
     class       TEXT,
     subclass    TEXT,
     race        TEXT,
+    height      TEXT,                             -- "just over 6'"
+    build       TEXT,                             -- "lean, moderately muscular"
+    hair        TEXT,
+    eyes        TEXT,
+    personality TEXT,
+    goals       TEXT,                             -- what drives them
     alignment   TEXT,
     role        TEXT CHECK (role IN ('protagonist','ally','antagonist','neutral','npc')),
     status      TEXT NOT NULL DEFAULT 'alive' CHECK (status IN ('alive','dead','missing','unknown')),
@@ -126,6 +132,8 @@ CREATE TABLE IF NOT EXISTS items (
     subtype       TEXT,                           -- "battle axe", "plate", "ring"
     slot          TEXT CHECK (slot IN ('main_hand','off_hand','two_hand','head','chest','hands',
                                        'legs','feet','cloak','neck','ring','belt','none')),
+    layer         TEXT CHECK (layer IN ('under','main','over')),  -- NULL = main. One item per slot *per layer*:
+                                                  -- mail (under) + breastplate (main) + surcoat (over) on the chest
     rarity        TEXT NOT NULL DEFAULT 'common'
                   CHECK (rarity IN ('common','uncommon','rare','epic','legendary','artifact','unique')),
     damage        TEXT,                           -- "1d12+2" or a flat number
@@ -231,6 +239,31 @@ CREATE TABLE IF NOT EXISTS character_effects (
     notes                 TEXT
 );
 
+ -- ---------------------------------------------------------------------------
+-- Skills: a catalogue, plus versioned levels per character. Each (character,
+-- skill) carries its level forward until the next version, like stats.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS skills (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL UNIQUE,            -- "Swordsmanship", "Calling the Light"
+    category     TEXT,                            -- combat / knowledge / language / magic / social / survival
+    description  TEXT,
+    notes        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS character_skills (
+    id              INTEGER PRIMARY KEY,
+    character_id    INTEGER NOT NULL REFERENCES characters(id)   ON DELETE CASCADE,
+    skill_id        INTEGER NOT NULL REFERENCES skills(id)       ON DELETE CASCADE,
+    story_point_id  INTEGER NOT NULL REFERENCES story_points(id) ON DELETE RESTRICT,
+    level           TEXT NOT NULL DEFAULT 'novice'
+                    CHECK (level IN ('untrained','novice','skilled','adept','expert','master','legendary')),
+    change_reason   TEXT,                         -- "drilled all winter", "first touched the Light"
+    notes           TEXT,
+    UNIQUE (character_id, skill_id, story_point_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_char_skills ON character_skills(character_id);
 CREATE INDEX IF NOT EXISTS idx_char_effects  ON character_effects(character_id);
 CREATE INDEX IF NOT EXISTS idx_titles_char   ON character_titles(character_id);
 CREATE INDEX IF NOT EXISTS idx_affil_char    ON character_affiliations(character_id);
@@ -421,3 +454,36 @@ SELECT
          ELSE CAST(c.age_at_start + p.years_elapsed AS INTEGER) END AS age
 FROM characters c CROSS JOIN pts p
 WHERE c.age_at_start IS NOT NULL;
+
+
+-- ---------------------------------------------------------------------------
+-- Skill level for every (character, skill, story point) from that skill's
+-- first version onward, carried forward.
+-- ---------------------------------------------------------------------------
+DROP VIEW IF EXISTS v_character_skills;
+CREATE VIEW v_character_skills AS
+WITH pairs AS (SELECT DISTINCT character_id, skill_id FROM character_skills),
+pts AS (
+    SELECT p.character_id, p.skill_id, sp.id AS story_point_id, sp.sequence, sp.label,
+           (SELECT cs.id FROM character_skills cs JOIN story_points s2 ON s2.id = cs.story_point_id
+             WHERE cs.character_id = p.character_id AND cs.skill_id = p.skill_id AND s2.sequence <= sp.sequence
+             ORDER BY s2.sequence DESC LIMIT 1) AS version_id
+    FROM pairs p CROSS JOIN story_points sp
+)
+SELECT
+    p.character_id,
+    c.name                                 AS character_name,
+    p.skill_id,
+    sk.name                                AS skill,
+    sk.category,
+    p.story_point_id,
+    p.sequence,
+    p.label                                AS story_point,
+    p.version_id,
+    (cs.story_point_id = p.story_point_id) AS is_snapshot,
+    cs.level,
+    cs.change_reason
+FROM pts p
+JOIN character_skills cs ON cs.id = p.version_id
+JOIN characters c        ON c.id  = p.character_id
+JOIN skills sk           ON sk.id = p.skill_id;

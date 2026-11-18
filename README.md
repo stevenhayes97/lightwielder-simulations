@@ -31,12 +31,14 @@ story_points ──┬──< character_stats >── characters ──< charact
 | Table | What it holds |
 |---|---|
 | `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`, `years_elapsed` (in-world years since the story began; drives ages). |
-| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, alignment, role, status, `age_at_start`, bio, notes. |
+| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, appearance (`height`, `build`, `hair`, `eyes`), `personality`, `goals`, alignment, role, status, `age_at_start`, bio, notes. |
 | `factions` | Kingdoms, orders, guilds, cults…: name, kind, description. |
 | `character_affiliations` | **Versioned rank & faction**: one row per character per story point, like stat versions. `faction` (blank = unaffiliated), `rank`, optional `secret_faction` (true loyalty of a spy or a traitor not yet revealed), `change_reason`. |
 | `character_titles` | **Versioned title / epithet** (*the Great*, *Greycloak*): one row per character per story point, carried forward until the next. No row yet = no title; a blank `title` = lost or stripped from that point. `change_reason`. |
+| `skills` | Skill catalogue: swordsmanship, history, a language, calling the Light…: name, category, description. |
+| `character_skills` | **Versioned skill levels**: one row per character per skill per story point, carried forward. `level`: untrained, novice, skilled, adept, expert, master, legendary. |
 | `character_stats` | **Versioned base stats**: one row per character per story point. `hp`, `strength`, `intelligence`, `stamina`, plus `change_reason`. |
-| `items` | Gear catalogue: category, slot, rarity, damage + type, armor rating, weight, value, strength requirement, description, lore. |
+| `items` | Gear catalogue: category, slot, `layer` (under / main / over), rarity, damage + type, armor rating, weight, value, strength requirement, description, lore. |
 | `item_modifiers` | Buffs/debuffs per item: target stat, `flat` or `percent`, amount (negative = debuff), optional `condition`. |
 | `character_equipment` | Who holds what **over a span of the story**: `from_story_point` up to (not including) `until_story_point`; blank = still held. `equipped` = 0 means carried or stashed, with no effect on stats. |
 | `loadouts` | Pre-built gear sets for "what if" comparisons. Set `character` for a personal loadout, or leave it blank for a **generic** loadout anyone can use. They don't change the story timeline. |
@@ -58,6 +60,16 @@ FROM v_character_affiliations WHERE story_point = 'Chapter 5';
 
 A **title** works the same way, in `character_titles`: a character can start the story without one, earn one in Ch. 5 and lose it in Ch. 12
 (a version with a blank title). `v_character_titles` gives the title in effect at every story point.
+
+### Armor layers
+Each slot holds one item **per layer**: `under` (mail, padding), `main` (the default; blank means main) and `over`
+(surcoat, tabard). Mail hauberk (chest, under) + breastplate (chest, main) + surcoat (chest, over) is a valid set; two
+`main` chest pieces still warn in the Loadout Lab. Every layer adds its armor rating and modifiers.
+
+### Skills
+`character_skills` works like stat versions, but per skill: record a level where it changes (*Calling the Light*:
+untrained in Ch. I, novice in Ch. 9). `v_character_skills` gives every skill's level at every story point; the character
+sheet shows the levels at the selected point and the history.
 
 ### Ages follow the story (`v_character_ages` view)
 Each character stores `age_at_start` once, and each story point can set `years_elapsed`: in-world years since the story began.
@@ -143,8 +155,7 @@ python -m unittest discover tests
 ```
 
 ## Roadmap ideas
-- **Skills** (swordsmanship, archery, horseback, stealth…): a `skills` catalogue plus versioned
-  `character_skills (character, skill, story_point, rank)`, with item and effect modifiers able to target skills.
+- **Skill modifiers**: let item and effect modifiers target skills, not just stats.
 - **TODO: rank hierarchy.** Ranks are free text for now. Possible next step: a per-faction `faction_ranks`
   ladder (name + order) so promotions and demotions show up automatically on sheets and faction timelines.
 - **TODO: alignment as free-form text.** `characters.alignment` is a one-line field built for labels like
