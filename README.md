@@ -151,4 +151,8 @@ python -m unittest discover tests
   *Lawful Good*. Replace it, or add a field next to it, with a free-form description of the character's moral outlook
   (beliefs, lines they won't cross, contradictions), shown as a multi-line box. Consider versioning it per story point,
   like titles, so the outlook can shift with the story.
+- **TODO: hit locations and lethal wounds.** HP is deliberately low for humans (about 10 is average), and some hits
+  should kill outright, whatever the HP. Possible shape: a `body_zones` table (head, neck, heart, torso, arms, legs…)
+  with an `instant_death` flag and a damage multiplier, armor that protects specific zones (via `items.slot`), and
+  race-level defaults so races can differ (e.g. humans low HP, others hardier or without a vital zone).
 - Abilities/spells, character relationships, CSV import/export.
