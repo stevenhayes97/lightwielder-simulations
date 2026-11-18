@@ -55,7 +55,7 @@ SELECT character_name, rank, faction, secret_faction
 FROM v_character_affiliations WHERE story_point = 'Chapter 5';
 ```
 
-Older DBs are upgraded automatically on start: `epithet` is renamed `title`, `suffix` and `nickname` are added, and a free-text `characters.faction` is migrated automatically on start: each value becomes a faction and a
+Older DBs are upgraded automatically on start: `epithet` is renamed `title`, `suffix` and `nickname` are added, and a free-text `characters.faction` is migrated: each value becomes a faction and a
 first affiliation version at the character's first stat version, and the old column is dropped.
 
 ### Effective stats (`v_effective_stats` view)
