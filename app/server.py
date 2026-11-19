@@ -45,6 +45,7 @@ TABLES = {
     "loadout_items": {"title": "Loadout Items", "label": None},
     "effects": {"title": "Effects", "label": "name"},
     "effect_modifiers": {"title": "Effect Modifiers", "label": None},
+    "damage_types": {"title": "Damage Types", "label": "name"},
 }
 
 BASE_STATS = ["hp", "strength", "intelligence", "stamina"]
@@ -96,7 +97,8 @@ def init_db(db_path, seed=False):
 # Columns added after the first release: table -> [(name, type)], in display order.
 ADDED_COLUMNS = {
     "characters": [("suffix", "TEXT"), ("nickname", "TEXT"), ("height", "TEXT"), ("build", "TEXT"),
-                   ("hair", "TEXT"), ("eyes", "TEXT"), ("personality", "TEXT"), ("goals", "TEXT")],
+                   ("hair", "TEXT"), ("eyes", "TEXT"), ("personality", "TEXT"), ("goals", "TEXT"),
+                   ("evil", "INTEGER NOT NULL DEFAULT 0 CHECK (evil IN (0,1))")],
     "items": [("layer", "TEXT CHECK (layer IN ('under','main','over'))")],
 }
 
@@ -479,6 +481,41 @@ def effect_sheet(conn, effect_id):
             "characters": sufferers}
 
 
+# ---------------------------------------------------------------------- damage
+
+def resolve_damage(conn, amount, damage_type, target):
+    """How much of a hit of `amount` `damage_type` damage lands on `target` (a characters row).
+    The type's multiplier comes from damage_types (x1 if the type isn't listed):
+    vs_evil_multiplier on evil beings, vs_other_multiplier on everyone else.
+    A multiplier of 0 means the hit passes through, harmless."""
+    dt = conn.execute("SELECT * FROM damage_types WHERE name = ?",
+                      ((damage_type or "").strip(),)).fetchone() if damage_type else None
+    evil = bool(target["evil"])
+    if dt is None:
+        mult = 1.0
+    else:
+        mult = dt["vs_evil_multiplier"] if evil else dt["vs_other_multiplier"]
+    final = max(0, sql_round(amount * mult))
+    return {"amount": amount, "damage_type": damage_type, "known_type": dt is not None,
+            "target_id": target["id"], "target_name": target["name"], "target_evil": evil,
+            "multiplier": mult, "damage": final, "passes_through": mult == 0}
+
+
+def damage(conn, params):
+    """GET /api/damage?target_id=&amount=&damage_type= (or item_id= to use that item's damage_type)."""
+    if not params.get("target_id", "").isdigit():
+        raise ApiError(HTTPStatus.BAD_REQUEST, "target_id is required")
+    target = get_row(conn, "characters", int(params["target_id"]))
+    try:
+        amount = float(params.get("amount", ""))
+    except ValueError:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "amount must be a number")
+    dtype = params.get("damage_type")
+    if params.get("item_id", "").isdigit():
+        dtype = get_row(conn, "items", int(params["item_id"]))["damage_type"]
+    return resolve_damage(conn, amount, dtype, target)
+
+
 # ------------------------------------------------------------------ simulation
 
 def sql_round(x):
@@ -704,6 +741,8 @@ class Handler(BaseHTTPRequestHandler):
             return affiliations(conn, params), ok
         if parts == ["titles"] and method == "GET":
             return titles(conn, params), ok
+        if parts == ["damage"] and method == "GET":
+            return damage(conn, params), ok
         if parts == ["simulate"] and method == "GET":
             return simulate(conn, params), ok
         if len(parts) == 3 and parts[2] == "sheet" and method == "GET":

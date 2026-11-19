@@ -123,7 +123,7 @@ function rowLabel(table, row) {
 const NAV_GROUPS = [
   ["Roster", ["characters", "character_stats", "character_affiliations", "character_titles", "factions", "story_points"]],
   ["Skills", ["skills", "character_skills"]],
-  ["Gear", ["items", "item_modifiers", "character_equipment"]],
+  ["Gear", ["items", "item_modifiers", "character_equipment", "damage_types"]],
   ["Effects", ["effects", "effect_modifiers", "character_effects"]],
   ["Loadouts", ["loadouts", "loadout_items"]],
 ];
@@ -347,7 +347,7 @@ async function renderCharacterSheet(id) {
       <a class="btn" href="#/t/characters">← Roster</a>
       <button class="btn" id="edit-char">Edit</button>
     </div>
-    <div class="detail">${fact("Class", [ch.class, ch.subclass].filter(Boolean).join(" / "))}${fact("Rank", affilNow?.rank)}${affilNow ? `<div><div class="k">Faction</div>${affilNow.faction_id ? `<a href="#/faction/${affilNow.faction_id}">${esc(affilNow.faction)}</a>` : "unaffiliated"}</div>` : ""}${affilNow?.secret_faction_id ? `<div><div class="k">Secret loyalty</div><a href="#/faction/${affilNow.secret_faction_id}">${esc(affilNow.secret_faction)}</a></div>` : ""}${fact("Alignment", ch.alignment)}${fact(point !== undefined ? "Age here" : "Age at start", ageNow)}</div>
+    <div class="detail">${fact("Class", [ch.class, ch.subclass].filter(Boolean).join(" / "))}${fact("Rank", affilNow?.rank)}${affilNow ? `<div><div class="k">Faction</div>${affilNow.faction_id ? `<a href="#/faction/${affilNow.faction_id}">${esc(affilNow.faction)}</a>` : "unaffiliated"}</div>` : ""}${affilNow?.secret_faction_id ? `<div><div class="k">Secret loyalty</div><a href="#/faction/${affilNow.secret_faction_id}">${esc(affilNow.secret_faction)}</a></div>` : ""}${fact("Alignment", ch.alignment)}${ch.evil ? fact("Nature", "Evil being (Light burns it)") : ""}${fact(point !== undefined ? "Age here" : "Age at start", ageNow)}</div>
     ${[ch.height, ch.build, ch.hair, ch.eyes].some(Boolean) ? `<div class="detail">${fact("Height", ch.height)}${fact("Build", ch.build)}${fact("Hair", ch.hair)}${fact("Eyes", ch.eyes)}</div>` : ""}
     ${ch.bio ? `<h3>Bio</h3><div class="prose">${esc(ch.bio)}</div>` : ""}
     ${ch.personality ? `<h3>Personality</h3><div class="prose">${esc(ch.personality)}</div>` : ""}
