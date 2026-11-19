@@ -31,7 +31,7 @@ story_points ──┬──< character_stats >── characters ──< charact
 | Table | What it holds |
 |---|---|
 | `story_points` | The timeline: `sequence` orders it (leave gaps like 10, 20, 30 so you can insert points later), `label`, `arc`, `years_elapsed` (in-world years since the story began; drives ages). |
-| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, appearance (`height`, `build`, `hair`, `eyes`), `personality`, `goals`, alignment, role, status, `age_at_start`, bio, notes. |
+| `characters` | Identity that doesn't change: name, `suffix` (*IV*, *Jr.*), `nickname`, **class**, subclass, race, appearance (`height`, `build`, `hair`, `eyes`), `personality`, `goals`, alignment, `evil` (an evil being: Light burns it), role, status, `age_at_start`, bio, notes. |
 | `factions` | Kingdoms, orders, guilds, cults…: name, kind, description. |
 | `faction_ranks` | **Rank ladder per faction**, which can branch: `faction`, `name`, `path` (blank = shared by all; e.g. *Archery* / *Infantry*), `tier` (1 = lowest; ranks on different paths can share a tier; leave gaps like 10, 20, 30), `description`, `requirements`. Hunters Guild: Cadet → (Archery: Marksman → Ranger) or (Infantry: Warden → Templar → Venator, a.k.a. Light Wielder) → Captain → Officer → Commander. |
 | `character_affiliations` | **Versioned rank & faction**: one row per character per story point, like stat versions. `faction` (blank = unaffiliated), `rank`, optional `secret_faction` (true loyalty of a spy or a traitor not yet revealed), `change_reason`. |
@@ -46,6 +46,7 @@ story_points ──┬──< character_stats >── characters ──< charact
 | `loadout_items` | Items in a loadout (`equipped` 0 = carried in the pack). |
 | `effects` | **Generic buffs/debuffs**: injury, exhaustion, blessings… `kind` (buff/debuff/mixed), `category`, `severity`. |
 | `effect_modifiers` | The stat changes an effect applies, in the same shape as item modifiers. |
+| `damage_types` | **How a hit lands depending on the target**: `name` (matched case-insensitively against `items.damage_type`), `vs_evil_multiplier`, `vs_other_multiplier` (0 = passes through, harmless). Ships with **light**: ×5 against evil beings, ×0 against everything else. |
 | `character_effects` | **Effects on the story timeline**: e.g. *Injured* from Ch. 7 until (not including) Ch. 9, with a `cause`. Blank `until` = ongoing. Same span rule as equipment. |
 
 ### Class vs rank vs faction
@@ -81,6 +82,17 @@ Negative values work for flashbacks; the age is blank before a character is born
 Older DBs are upgraded automatically on start: `characters.age` is renamed `age_at_start` and `story_points.years_elapsed` is added; `suffix` and `nickname` are added; a fixed `characters.title` (or older `epithet`) becomes a first
 `character_titles` version at the character's first stat version, and the column is dropped; and a free-text `characters.faction` is migrated: each value becomes a faction and a
 first affiliation version at the character's first stat version, and the old column is dropped.
+
+### Light damage
+Mark evil beings with `characters.evil` = 1. A hit's damage type is looked up in `damage_types`:
+`damage = round(amount × vs_evil_multiplier)` against an evil being, `round(amount × vs_other_multiplier)` against anyone else.
+**Light** is ×5 against evil and ×0 against everything else, so it passes straight through allies, bystanders and objects
+without harm. Edit the row to tune how hard it hits. A damage type that isn't in the table does normal damage (×1).
+
+```
+GET /api/damage?target_id=3&amount=6&damage_type=light   → {"multiplier": 5, "damage": 30, "passes_through": false, ...}
+GET /api/damage?target_id=4&amount=6&item_id=8           → uses the item's damage_type
+```
 
 ### Effective stats (`v_effective_stats` view)
 For every character at every story point from their first stat version onward:
@@ -148,6 +160,7 @@ JSON over HTTP, for scripts and future simulation code:
 | `GET /api/characters/<id>/sheet` → `ages` | Age at every story point |
 | `GET /api/factions/<id>/sheet` | Faction + members per point + timeline of events |
 | `GET /api/loadouts/<id>/sheet`, `GET /api/effects/<id>/sheet` | Loadout + items; effect + modifiers |
+| `GET /api/damage?target_id=&amount=&damage_type=` (or `item_id=`) | Damage that lands on a target (see *Light damage*) |
 | `GET /api/simulate?character_id=&story_point_id=&loadouts=1,2&effects=3,4&current=1&bare=1&story_effects=1` | Loadout Lab comparison (omit `story_point_id` for latest) |
 
 ## Tests

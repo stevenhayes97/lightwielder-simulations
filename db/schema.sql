@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS characters (
     personality TEXT,
     goals       TEXT,                             -- what drives them
     alignment   TEXT,
-    role        TEXT CHECK (role IN ('protagonist','ally','antagonist','neutral','npc')),
+    evil        INTEGER NOT NULL DEFAULT 0 CHECK (evil IN (0,1)),  -- 1 = an evil being: Light damage burns it
+    role       TEXT CHECK (role IN ('protagonist','ally','antagonist','neutral','npc')),
     status      TEXT NOT NULL DEFAULT 'alive' CHECK (status IN ('alive','dead','missing','unknown')),
     age_at_start INTEGER,                         -- age when the story starts (years_elapsed = 0); see v_character_ages
     bio         TEXT,
@@ -283,6 +284,27 @@ CREATE TABLE IF NOT EXISTS character_skills (
     notes           TEXT,
     UNIQUE (character_id, skill_id, story_point_id)
 );
+
+-- ---------------------------------------------------------------------------
+-- Damage types: how much of a hit lands, depending on who it hits.
+-- Matched by name (case-insensitive) against items.damage_type.
+--   vs_evil_multiplier   damage x this against characters with evil = 1
+--   vs_other_multiplier  damage x this against everyone else;
+--                        0 = the hit passes straight through, harmless
+-- A damage type missing from this table does normal damage (x1) to anyone.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS damage_types (
+    id                   INTEGER PRIMARY KEY,
+    name                 TEXT NOT NULL UNIQUE COLLATE NOCASE,  -- "light", "slashing"
+    vs_evil_multiplier   REAL NOT NULL DEFAULT 1,
+    vs_other_multiplier  REAL NOT NULL DEFAULT 1,
+    description          TEXT,
+    notes                TEXT
+);
+
+-- Built in, and only inserted if missing, so edits to the multiplier stick.
+INSERT OR IGNORE INTO damage_types (name, vs_evil_multiplier, vs_other_multiplier, description) VALUES
+ ('light', 5, 0, 'The Light. Devastating to evil beings; passes harmlessly through everything and everyone else.');
 
 CREATE INDEX IF NOT EXISTS idx_char_skills ON character_skills(character_id);
 CREATE INDEX IF NOT EXISTS idx_char_effects  ON character_effects(character_id);

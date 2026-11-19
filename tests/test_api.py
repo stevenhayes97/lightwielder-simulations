@@ -364,6 +364,30 @@ class ApiTest(unittest.TestCase):
         members = self.call("GET", f"/api/affiliations?faction_id={cult['id']}&story_point_id={p3['id']}", expect=200)
         self.assertEqual([m["character_name"] for m in members], ["Turncoat"])
 
+    def test_light_damage(self):
+        demon = self.post("characters", {"name": "Light Test Demon", "evil": 1})
+        human = self.post("characters", {"name": "Light Test Human"})
+        blade = self.post("items", {"name": "Light Test Blade", "category": "weapon", "damage_type": "Light"})
+
+        hit = self.call("GET", f"/api/damage?target_id={demon['id']}&amount=6&damage_type=light", expect=200)
+        self.assertEqual((hit["multiplier"], hit["damage"], hit["passes_through"]), (5, 30, False))
+        hit = self.call("GET", f"/api/damage?target_id={human['id']}&amount=6&damage_type=light", expect=200)
+        self.assertEqual((hit["damage"], hit["passes_through"]), (0, True))
+        # the item's damage_type is used, case-insensitively
+        hit = self.call("GET", f"/api/damage?target_id={demon['id']}&amount=3&item_id={blade['id']}", expect=200)
+        self.assertEqual(hit["damage"], 15)
+        # types not in damage_types do normal damage to everyone
+        for t in (demon, human):
+            hit = self.call("GET", f"/api/damage?target_id={t['id']}&amount=6&damage_type=slashing", expect=200)
+            self.assertEqual((hit["damage"], hit["known_type"]), (6, False))
+        # the multiplier is editable data
+        light = self.call("GET", "/api/damage_types?name=light", expect=200)[0]
+        self.call("PUT", f"/api/damage_types/{light['id']}", {"vs_evil_multiplier": 10}, expect=200)
+        hit = self.call("GET", f"/api/damage?target_id={demon['id']}&amount=6&damage_type=light", expect=200)
+        self.assertEqual(hit["damage"], 60)
+        self.call("PUT", f"/api/damage_types/{light['id']}", {"vs_evil_multiplier": 5}, expect=200)
+        self.call("GET", f"/api/damage?target_id={demon['id']}&amount=x", expect=400)
+
     def test_sql_round_matches_sqlite(self):
         conn = server.connect(":memory:")
         for x in (2.5, 3.5, -2.5, 0.5, 30.8, -0.49, 12.5):
@@ -419,7 +443,7 @@ class SeedTest(unittest.TestCase):
             self.assertNotIn("title", cols)
             self.assertIn("age_at_start", cols)
             self.assertNotIn("age", cols)
-            self.assertTrue({"suffix", "nickname", "height", "build", "hair", "eyes", "personality", "goals"} <= set(cols))
+            self.assertTrue({"suffix", "nickname", "height", "build", "hair", "eyes", "personality", "goals", "evil"} <= set(cols))
             self.assertIn("layer", server.columns_of(conn, "items"))
             self.assertEqual([tuple(r) for r in conn.execute("SELECT character_id, story_point_id, title FROM character_titles")],
                              [(1, 1, "the Bold")])
